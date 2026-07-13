@@ -1,0 +1,4 @@
+# Developed on Windows, deployed on Debian. Force LF in the working tree so
+# Python and shell files check out correctly on the Linux target regardless of
+# the editor used here.
+* text=auto eol=lf

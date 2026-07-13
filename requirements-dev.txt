@@ -1,0 +1,5 @@
+# Dev-only dependencies. The RUNTIME path has zero third-party dependencies and
+# must stay that way (stdlib + Tkinter only) — nothing here is imported by the
+# application. pytest drives the engine-arithmetic and distance-accumulator
+# tests (build order step 2).
+pytest

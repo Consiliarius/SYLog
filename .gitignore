@@ -1,0 +1,32 @@
+# ── Runtime data — never commit ────────────────────────────────────────────
+# The skipper's logbook is real data, not fixtures. The working database lives
+# at ~/logbook/ and backups at ~/OneDrive/logbook/ — both OUTSIDE this repo —
+# so these globs are the real guard against a stray copy being committed.
+# (NB: intentionally NO bare `logbook/` rule — that would match and ignore the
+#  source package of the same name. See docs/logbook-scope.md §3.6.)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.csv
+backups/
+
+# ── Local configuration — template committed, live file not ────────────────
+# config.json carries machine-specific paths and the engine-hours baseline.
+config.json
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Editors / OS / tooling ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.claude/settings.local.json
