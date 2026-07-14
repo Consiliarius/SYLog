@@ -73,14 +73,39 @@ sudo apt install python3 python3-tk gpsd gpsd-clients git chrony
 python3 --version          # 3.9 or newer (zoneinfo)
 ```
 
-**2. Get the code.** The repository is private, so this needs authentication —
-either the GitHub CLI, or an SSH deploy key:
+**2. Get the code.** The repository is private, so the clone needs
+authentication. **`gh` is not in Debian's default packages** — the simplest route
+on a deployment machine is an SSH key, which also makes `git pull` work for later
+updates.
 
 ```bash
-gh auth login && gh repo clone Consiliarius/SYLog     # or:
+ssh-keygen -t ed25519 -C "netbook-sylog"    # accept the default path
+cat ~/.ssh/id_ed25519.pub                   # copy this one line
+```
+
+Add that public key to GitHub from a browser on any machine:
+**repo → Settings → Deploy keys → Add deploy key**. Read-only is enough to clone
+and pull, and a deploy key is scoped to this one repository — which is what you
+want on a boat machine. Then:
+
+```bash
+ssh -T git@github.com        # expect: "Hi ...! You've successfully authenticated"
 git clone git@github.com:Consiliarius/SYLog.git
 cd SYLog
 ```
+
+If port 22 is blocked on the network, add to `~/.ssh/config`:
+
+```
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+```
+
+If you would rather use the GitHub CLI, it needs GitHub's own apt repository
+(<https://github.com/cli/cli/blob/trunk/docs/install_linux.md>) and then
+`gh auth login` with the device-code flow. It is not needed for any of this.
 
 **3. Run the tests first.** They need nothing installed (stdlib `unittest`) and
 prove the build is sound on this machine before any real data exists:
