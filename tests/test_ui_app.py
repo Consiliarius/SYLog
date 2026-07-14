@@ -121,6 +121,20 @@ class AppShellTestCase(unittest.TestCase):
         launch.refresh()
         self.assertIn("documented", launch._engine_hours.cget("text"))
 
+    # -- theme (light for daylight, dark for night) ----------------------------
+
+    def test_theme_toggle_switches_palette_and_restyles(self):
+        self.addCleanup(theme.use, "light")          # leave the module as we found it
+        self.assertEqual(theme.MODE, "light")
+        daylight_bg = theme.BG
+
+        self.assertEqual(self.app.toggle_theme(), "dark")
+        self.assertNotEqual(theme.BG, daylight_bg)
+        self.assertEqual(str(self.app.root.cget("bg")), theme.BG)   # chrome restyled
+
+        self.assertEqual(self.app.toggle_theme(), "light")
+        self.assertEqual(theme.BG, daylight_bg)
+
     # -- clock offset (§3.4) ---------------------------------------------------
 
     def _put_fix(self, when):

@@ -124,7 +124,7 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(self._entries(), [])          # nothing written
         self.assertIn("required", form._banner.cget("text"))
 
-        form.issue.insert(0, "Overheating at high revs")
+        form.issue.insert("1.0", "Overheating at high revs")
         form._log_issue()
         row = self._entries()[-1]
         self.assertEqual(row["event_kind"], "engine_issue")

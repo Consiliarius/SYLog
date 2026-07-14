@@ -94,6 +94,32 @@ class SessionTestCase(unittest.TestCase):
         edit._save()
         self.assertEqual(self.d.open_session()["skipper"], "A. Skipper")
 
+    def test_starting_a_session_marks_the_log_as_opened(self):
+        app = self._app()
+        forms.SessionStartView(app._content, app)._skip()
+        session = self.d.open_session()
+        row = self.d.session_entries(session["id"])[0]
+        self.assertEqual(row["event_kind"], "session_open")   # the log says it opened
+
+    def test_variation_uses_an_east_west_selector(self):
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        magnitude, hemisphere = view.entries["variation_deg"]
+        magnitude.insert(0, "2")
+        hemisphere.set("W")
+        view._start()
+        # West is negative, East positive: True = Magnetic + easterly variation.
+        self.assertEqual(self.d.open_session()["variation_deg"], -2.0)
+
+    def test_variation_round_trips_through_the_edit_view(self):
+        app = self._app()
+        self.d.create_session(opened_utc=db.to_iso_utc(datetime.now(UTC)), variation_deg=3.0)
+        session = self.d.open_session()
+        view = forms.SessionEditView(app._content, app, session)
+        magnitude, hemisphere = view.entries["variation_deg"]
+        self.assertEqual(magnitude.get(), "3")       # magnitude shown without a sign
+        self.assertEqual(hemisphere.get(), "E")      # positive -> East
+
     # -- auto-log (§6.3) -------------------------------------------------------
 
     def test_autolog_entry_with_fix_carries_position(self):
@@ -124,6 +150,18 @@ class SessionTestCase(unittest.TestCase):
         self.assertEqual(self.d.open_session()["autolog_active"], 1)
         self.assertEqual(len(self.d.session_entries(session["id"])), 1)
         self.assertIn("■", view._autolog_btn.cget("text"))
+
+    def test_autolog_marks_both_edges_in_the_log(self):
+        session = self._open_session()
+        app = self._app()
+        view = app.views.show(SessionView(app._content, app, session))
+        view._toggle_autolog()          # on
+        view._toggle_autolog()          # off
+        kinds = [r["event_kind"] for r in
+                 self.d.session_entries(session["id"], newest_first=False)]
+        # A gap between auto fixes must be explicable, not merely absent.
+        self.assertEqual(kinds, ["autolog_on", "autolog_off"])
+        self.assertEqual(self.d.open_session()["autolog_active"], 0)
 
     def test_autolog_prompt_on_restart(self):
         session = self._open_session()

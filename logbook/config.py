@@ -96,6 +96,13 @@ class Config:
     def clock_offset_warn_sec(self) -> float:
         return self._logging("clock_offset_warn_sec", 60)
 
+    # -- ui -------------------------------------------------------------------
+
+    @property
+    def theme(self) -> str:
+        """'light' (daylight, the default) or 'dark' (night mode). F2 toggles."""
+        return str(self._data.get("ui", {}).get("theme", "light"))
+
     # -- backup ---------------------------------------------------------------
 
     @property

@@ -19,6 +19,7 @@ from pathlib import Path
 from logbook import config as config_mod
 from logbook import db as db_mod
 from logbook import gps
+from logbook.ui import theme
 from logbook.ui.app import App
 
 ROOT = Path(__file__).resolve().parents[1]  # repo/install root (parent of logbook/)
@@ -55,6 +56,7 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     cfg = config_mod.load(args.config, example_path=args.example)
+    theme.use(cfg.theme)          # light for daylight, dark for night; F2 toggles
     db_path = _resolve_db_path(cfg, args.db)
     _ensure_location(db_path, cfg.backup_dir)
     d = db_mod.open_db(db_path)

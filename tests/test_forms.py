@@ -85,14 +85,22 @@ class FormTestCase(unittest.TestCase):
     def test_beaufort_stored_not_converted(self):
         form = self._form()
         wind = form.pages[1][0]
-        wind.dir.insert(0, "225")
+        wind.dir.set("SW")                   # 16-point dropdown -> degrees
         wind.force.insert(0, "5")
-        wind.sea.insert(0, "4")
+        wind.sea.set("4 - Moderate")         # Douglas scale dropdown -> integer
         form._save()
         row = self._only_entry()
+        self.assertEqual(row["wind_dir_deg"], 225.0)
         self.assertEqual(row["wind_force_bf"], 5)
-        self.assertIsNone(row["wind_speed_kn"])
+        self.assertIsNone(row["wind_speed_kn"])   # never derived from Beaufort
         self.assertEqual(row["sea_state"], 4)
+
+    def test_sixteen_point_wind_includes_the_intermediate_points(self):
+        form = self._form()
+        wind = form.pages[1][0]
+        wind.dir.set("WSW")                  # would be impossible on an 8-point scale
+        form._save()
+        self.assertEqual(self._only_entry()["wind_dir_deg"], 247.5)
 
     def test_paging_button_states(self):
         form = self._form()
@@ -125,18 +133,22 @@ class FormTestCase(unittest.TestCase):
         form = self._form("sail_form")
         self.assertEqual(form.pages[0][0].vars["genoa"].get(), "partly furled")
 
-    def test_radio_form(self):
+    def test_radio_form_carries_the_message(self):
         form = self._form("radio_form")
-        form.pages[0][0].channel.insert(0, "VHF 16")
-        form.pages[0][0].station.insert(0, "Solent CG")
+        radio = form.pages[0][0]
+        radio.channel.insert(0, "VHF 16")
+        radio.station.insert(0, "Solent CG")
+        radio.message.insert("1.0", "Pan Pan relay for yacht Osprey")
         form._save()
         row = self._only_entry()
         self.assertEqual(row["category"], "radio")
         self.assertEqual(row["radio_channel"], "VHF 16")
+        self.assertEqual(row["radio_station"], "Solent CG")
+        self.assertIn("Pan Pan relay", row["remarks"])    # the message body
 
     def test_crew_note(self):
         form = self._form("crew_form")
-        form.pages[0][0].remarks.insert(0, "Crew changed watch")
+        form.pages[0][0].remarks.insert("1.0", "Crew changed watch")
         form._save()
         row = self._only_entry()
         self.assertEqual(row["category"], "crew")

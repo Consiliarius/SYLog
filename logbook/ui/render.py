@@ -27,14 +27,20 @@ _TAG_BY_EVENT = {
     "departure": "DEPART", "arrival": "ARRIVE",
     "engine_on": "ENGINE", "engine_off": "ENGINE",
     "engine_duration": "ENGINE", "engine_issue": "ENGINE",
+    "session_open": "LOG", "autolog_on": "AUTO", "autolog_off": "AUTO",
 }
 _TAG_BY_CATEGORY = {
     "auto": "AUTO", "observation": "OBS", "sail": "SAIL",
     "radio": "RADIO", "crew": "CREW", "event": "EVENT",
 }
-_ENGINE_EVENT_TEXT = {
+# The words an event row renders as. Engine, plus the markers that make the log
+# self-explaining: when it was opened, and when auto-logging started and stopped
+# (so a gap between fixes is explicable rather than merely missing).
+_EVENT_TEXT = {
     "engine_on": "Started", "engine_off": "Stopped",
     "engine_duration": "Run logged", "engine_issue": "Issue",
+    "session_open": "Log opened",
+    "autolog_on": "Auto-log started", "autolog_off": "Auto-log stopped",
 }
 
 
@@ -131,8 +137,8 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
 
     if row["radio_channel"] or row["radio_station"]:
         parts.append(" · ".join(x for x in (row["radio_channel"], row["radio_station"]) if x))
-    if row["event_kind"] in _ENGINE_EVENT_TEXT:
-        parts.append(_ENGINE_EVENT_TEXT[row["event_kind"]])
+    if row["event_kind"] in _EVENT_TEXT:
+        parts.append(_EVENT_TEXT[row["event_kind"]])
     if row["remarks"]:
         parts.append(row["remarks"])
 

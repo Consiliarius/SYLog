@@ -55,13 +55,37 @@ class EngineTestCase(unittest.TestCase):
         self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
         self.assertEqual(engine.stop(self.d, at(9, 30)).duration_min, 30.0)
 
-    def test_stop_before_start_rejected_and_run_stays_open(self):
+    def test_stop_preceding_start_rejected_and_run_stays_open(self):
         engine.start(self.d, at(10))
         with self.assertRaises(engine.EngineError):
-            engine.stop(self.d, at(9, 59))
-        with self.assertRaises(engine.EngineError):
-            engine.stop(self.d, at(10))  # equal is not "after"
+            engine.stop(self.d, at(9, 59))          # precedes the start
         self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
+
+    def test_zero_minute_run_is_allowed(self):
+        """§6.5 forbids a stop that PRECEDES its start, not one that coincides.
+
+        The live ▶/■ button can only ever produce a sub-second run, so rejecting
+        the manual equivalent (which works in whole minutes) was inconsistent —
+        the two paths must agree.
+        """
+        engine.start(self.d, at(10))
+        result = engine.stop(self.d, at(10))        # same minute: a 0-minute run
+        self.assertEqual(result.duration_min, 0.0)
+        self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.STOPPED)
+        self.assertEqual(engine.cumulative_minutes(self.d), 0.0)
+
+    def test_zero_duration_completed_run_is_allowed(self):
+        result = engine.add_completed(self.d, duration_min=0)
+        self.assertEqual(result.duration_min, 0.0)
+        result = engine.add_completed(self.d, started=at(10), stopped=at(10))
+        self.assertEqual(result.duration_min, 0.0)
+
+    def test_engine_notes_are_stored_on_the_run(self):
+        run = engine.start(self.d, at(10), notes="cold start, choke out")
+        engine.stop(self.d, at(11), notes="ran rough at idle")
+        row = self.d.conn.execute("SELECT notes FROM engine_run WHERE id = ?",
+                                  (run.run_id,)).fetchone()
+        self.assertIn("ran rough", row["notes"])
 
     def test_start_while_running_rejected(self):
         engine.start(self.d, at(10))
@@ -94,10 +118,9 @@ class EngineTestCase(unittest.TestCase):
         for kwargs in (
             {},                                                   # nothing
             {"duration_min": 30, "started": at(10), "stopped": at(11)},  # both forms
-            {"started": at(11), "stopped": at(10)},               # stop before start
+            {"started": at(11), "stopped": at(10)},               # stop precedes start
             {"started": at(10)},                                  # missing stop
-            {"duration_min": 0},                                  # non-positive
-            {"duration_min": -5},
+            {"duration_min": -5},                                 # negative (zero is fine)
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(engine.EngineError):

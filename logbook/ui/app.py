@@ -135,6 +135,7 @@ class App:
         self._init_window()
         self._build_chrome()
         self.views = ViewManager(self._content)
+        self._reshow = self.show_launch
         self.show_startup()
 
         if start_reader:
@@ -165,21 +166,22 @@ class App:
         self._fullscreen = False
         self.root.bind("<F11>", self.toggle_fullscreen)
         self.root.bind("<Escape>", self._exit_fullscreen)
+        self.root.bind("<F2>", self.toggle_theme)
 
     def _build_chrome(self) -> None:
         self._content = tk.Frame(self.root, bg=theme.BG)
         self._content.pack(side="top", fill="both", expand=True)
-        bar = tk.Frame(self.root, bg=theme.BG_PANEL)
-        bar.pack(side="bottom", fill="x")
-        self._gps_label = tk.Label(bar, text="GPS offline", fg=theme.BAD,
+        self._bar = tk.Frame(self.root, bg=theme.BG_PANEL)
+        self._bar.pack(side="bottom", fill="x")
+        self._gps_label = tk.Label(self._bar, text="GPS offline", fg=theme.BAD,
                                    bg=theme.BG_PANEL, font=self.font_small)
         self._gps_label.pack(side="right", padx=theme.PAD, pady=2)
-        self._clock_label = tk.Label(bar, text="", fg=theme.BAD,
+        self._clock_label = tk.Label(self._bar, text="", fg=theme.BAD,
                                      bg=theme.BG_PANEL, font=self.font_small)
         self._clock_label.pack(side="right", padx=theme.PAD, pady=2)
         self._refresh_gps_indicator()
 
-    # -- fullscreen -----------------------------------------------------------
+    # -- fullscreen and theme -------------------------------------------------
 
     def toggle_fullscreen(self, event=None) -> None:
         self._fullscreen = not self._fullscreen
@@ -189,6 +191,22 @@ class App:
         if self._fullscreen:
             self._fullscreen = False
             self.root.attributes("-fullscreen", False)
+
+    def toggle_theme(self, event=None) -> str:
+        """F2: light (daylight) ⇄ dark (night). Widgets read their colours at
+        construction, so the chrome is restyled and the current view re-shown."""
+        mode = theme.use(theme.other())
+        self._restyle()
+        self._reshow()
+        return mode
+
+    def _restyle(self) -> None:
+        self.root.configure(bg=theme.BG)
+        self._content.configure(bg=theme.BG)
+        self._bar.configure(bg=theme.BG_PANEL)
+        self._gps_label.configure(bg=theme.BG_PANEL)
+        self._clock_label.configure(bg=theme.BG_PANEL, fg=theme.BAD)
+        self._refresh_gps_indicator()
 
     # -- the GPS tick (thread boundary) ---------------------------------------
 
@@ -252,38 +270,48 @@ class App:
 
     # -- views ----------------------------------------------------------------
 
+    def _show(self, factory) -> None:
+        """Show a view, remembering how to rebuild it — a theme switch re-shows."""
+        self._reshow = factory
+        self.views.show(factory())
+
     def show_launch(self, event=None) -> None:
-        self.views.show(LaunchView(self._content, self))
+        self._show(lambda: LaunchView(self._content, self))
 
     def show_placeholder(self, title: str) -> None:
-        self.views.show(PlaceholderView(self._content, self, title))
+        self._show(lambda: PlaceholderView(self._content, self, title))
 
     def show_session(self, session_row) -> None:
-        self.views.show(SessionView(self._content, self, session_row))
+        self._show(lambda: SessionView(self._content, self, session_row))
+
+    def show_session_start(self) -> None:
+        from logbook.ui import forms
+        self._show(lambda: forms.SessionStartView(self._content, self))
 
     def show_observation_form(self, session_row) -> None:
         self.show_form("observation_form", session_row)
 
     def show_form(self, factory: str, session_row) -> None:
         from logbook.ui import forms  # lazy: forms imports back into this module
-        self.views.show(getattr(forms, factory)(self._content, self, session_row))
+        self._show(lambda: getattr(forms, factory)(self._content, self, session_row))
 
     def show_engine_prompt(self) -> None:
-        self.views.show(EnginePromptView(self._content, self))
+        self._show(lambda: EnginePromptView(self._content, self))
 
     # -- viewer (step 5) -------------------------------------------------------
 
     def show_viewer(self, event=None) -> None:
         from logbook.ui import viewer
-        self.views.show(viewer.ViewerSessionsView(self._content, self))
+        self._show(lambda: viewer.ViewerSessionsView(self._content, self))
 
     def show_viewer_entries(self, session_row) -> None:
         from logbook.ui import viewer
-        self.views.show(viewer.ViewerEntriesView(self._content, self, session_row))
+        self._show(lambda: viewer.ViewerEntriesView(self._content, self, session_row))
 
     def show_viewer_entry(self, session_row, entry_row) -> None:
         from logbook.ui import viewer
-        self.views.show(viewer.ViewerEntryEditView(self._content, self, session_row, entry_row))
+        self._show(lambda: viewer.ViewerEntryEditView(
+            self._content, self, session_row, entry_row))
 
     # -- export + backup on session close (§3.6, §6.2) -------------------------
 
@@ -316,7 +344,7 @@ class App:
         return notes
 
     def show_autolog_prompt(self, session_row) -> None:
-        self.views.show(AutologPromptView(self._content, self, session_row))
+        self._show(lambda: AutologPromptView(self._content, self, session_row))
 
     def show_startup(self) -> None:
         """Surface anything left unresolved by a crash, one prompt at a time.
@@ -557,13 +585,11 @@ class LaunchView(tk.Frame):
             self._banner.configure(text="; ".join(result.warnings), fg=theme.WARN)
 
     def _start_session(self) -> None:
-        d = self.app.d
-        session = d.open_session()
+        session = self.app.d.open_session()
         if session is not None:
             self.app.show_session(session)          # resume
             return
-        from logbook.ui import forms
-        self.app.views.show(forms.SessionStartView(self.app._content, self.app))
+        self.app.show_session_start()
 
     def _view_log(self) -> None:
         self.app.show_viewer()
@@ -671,8 +697,11 @@ class SessionView(tk.Frame):
             return
         active = bool(session["autolog_active"])
         d.set_autolog_active(session["id"], not active)
-        if not active:                     # just armed — record the moment it started
-            write_autolog_entry(self.app, d.open_session())
+        # Mark BOTH edges in the log. A gap between auto fixes should be
+        # explicable: the log says when auto-logging began and when it stopped,
+        # rather than leaving a reader to infer it from an absence of rows.
+        write_event(self.app, session, when=datetime.now(timezone.utc),
+                    event_kind="autolog_off" if active else "autolog_on")
         self.refresh_controls()
         self.refresh_log()
 

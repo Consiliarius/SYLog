@@ -35,6 +35,28 @@ _VISIBILITY = ("", "good", "moderate", "poor", "fog")
 _HEADING_REF = ("M", "T")
 _NOT_SET = "(not set)"
 
+# Wind direction: 16 points (§6.6). Chosen over 8 so WSW/ENE can be recorded —
+# a distinction sailors actually make. Stored as degrees; the name is display.
+_WIND_POINTS = ("", "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+_WIND_DEG = {name: index * 22.5 for index, name in enumerate(_WIND_POINTS[1:])}
+
+# Douglas sea scale, 0-9 — spelled out so nobody has to remember it. Stored as
+# the integer; the description is display only.
+_SEA_STATE = (
+    "",
+    "0 - Calm (glassy)",
+    "1 - Calm (rippled)",
+    "2 - Smooth (wavelets)",
+    "3 - Slight",
+    "4 - Moderate",
+    "5 - Rough",
+    "6 - Very rough",
+    "7 - High",
+    "8 - Very high",
+    "9 - Phenomenal",
+)
+
 
 def _num(text, cast=float):
     text = text.strip()
@@ -49,6 +71,31 @@ def _num(text, cast=float):
 
 def _opt(var):
     value = var.get().strip()
+    return value or None
+
+
+def _leading_int(text):
+    """'4 - Moderate' -> 4. Blank -> None."""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return int(text.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def _text_box(app, parent, *, height=4, width=48):
+    """A real multi-line box. Single-line Entry widgets scroll horizontally for
+    long text, which is unusable at the chart table — free text gets a Text."""
+    return tk.Text(parent, height=height, width=width, wrap="word",
+                   bg=theme.BG_PANEL, fg=theme.FG, insertbackground=theme.FG,
+                   bd=0, highlightthickness=1, highlightbackground=theme.BG_BUTTON,
+                   font=app.font_base)
+
+
+def _text_value(widget):
+    value = widget.get("1.0", "end").strip()
     return value or None
 
 
@@ -160,26 +207,36 @@ class WindSea(_Group):
 
     def build(self, parent):
         box = self._box(parent)
-        self._label(box, "Wind from°").grid(row=0, column=0, sticky="e")
-        self.dir = self._entry(box, width=6)
-        self.dir.grid(row=0, column=1, padx=(2, theme.PAD))
-        self._label(box, "Speed kn").grid(row=0, column=2, sticky="e")
-        self.speed = self._entry(box, width=6)
-        self.speed.grid(row=0, column=3, padx=(2, theme.PAD))
-        self._label(box, "or Force").grid(row=1, column=0, sticky="e")
-        self.force = self._entry(box, width=6)
-        self.force.grid(row=1, column=1, padx=(2, theme.PAD))
-        self._label(box, "Sea 0-9").grid(row=1, column=2, sticky="e")
-        self.sea = self._entry(box, width=6)
-        self.sea.grid(row=1, column=3, padx=(2, theme.PAD))
+
+        # All three wind fields on one line — they are observed and read together.
+        wind = tk.Frame(box, bg=theme.BG)
+        wind.grid(row=0, column=0, sticky="w")
+        self._label(wind, "Wind from").pack(side="left")
+        self.dir, dir_menu = self._menu(wind, _WIND_POINTS)
+        dir_menu.pack(side="left", padx=(4, theme.PAD * 2))
+        self._label(wind, "Speed").pack(side="left")
+        self.speed = self._entry(wind, width=5)
+        self.speed.pack(side="left", padx=4)
+        self._label(wind, "kn    or  Force").pack(side="left")
+        self.force = self._entry(wind, width=5)
+        self.force.pack(side="left", padx=4)
+        self._label(wind, "Bf").pack(side="left")
+
+        sea = tk.Frame(box, bg=theme.BG)
+        sea.grid(row=1, column=0, sticky="w", pady=(theme.PAD, 0))
+        self._label(sea, "Sea State").pack(side="left")
+        self.sea, sea_menu = self._menu(sea, _SEA_STATE)
+        sea_menu.pack(side="left", padx=(4, theme.PAD))
+        self._label(sea, "(Douglas scale)").pack(side="left")
         return box
 
     def collect(self) -> dict:
+        # Beaufort OR knots — stored as given, never one derived from the other.
         return {
-            "wind_dir_deg": _num(self.dir.get()),
+            "wind_dir_deg": _WIND_DEG.get(self.dir.get().strip()),
             "wind_speed_kn": _num(self.speed.get()),
             "wind_force_bf": _num(self.force.get(), int),
-            "sea_state": _num(self.sea.get(), int),
+            "sea_state": _leading_int(self.sea.get()),
         }
 
 
@@ -189,20 +246,34 @@ class Weather(_Group):
 
     def build(self, parent):
         box = self._box(parent)
-        self._label(box, "Cloud /8").grid(row=0, column=0, sticky="e")
-        self.cloud = self._entry(box, width=6)
-        self.cloud.grid(row=0, column=1, padx=(2, theme.PAD))
-        self._label(box, "Pressure mb").grid(row=0, column=2, sticky="e")
-        self.pressure = self._entry(box, width=8)
-        self.pressure.grid(row=0, column=3, padx=(2, theme.PAD))
-        self._label(box, "Precip").grid(row=1, column=0, sticky="e")
-        self.ptype, pmenu = self._menu(box, _PRECIP_TYPES)
-        pmenu.grid(row=1, column=1, sticky="ew")
-        self.pint, imenu = self._menu(box, _INTENSITIES)
-        imenu.grid(row=1, column=2, sticky="ew")
-        self._label(box, "Visibility").grid(row=2, column=0, sticky="e")
-        self.vis, vmenu = self._menu(box, _VISIBILITY)
-        vmenu.grid(row=2, column=1, sticky="ew")
+
+        cloud = tk.Frame(box, bg=theme.BG)
+        cloud.grid(row=0, column=0, sticky="w")
+        self._label(cloud, "Cloud cover, in eighths").pack(side="left")
+        self.cloud = self._entry(cloud, width=5)
+        self.cloud.pack(side="left", padx=theme.PAD)
+        self._label(cloud, "(0-8)").pack(side="left")
+
+        pressure = tk.Frame(box, bg=theme.BG)
+        pressure.grid(row=1, column=0, sticky="w", pady=(theme.PAD, 0))
+        self._label(pressure, "Pressure").pack(side="left")
+        self.pressure = self._entry(pressure, width=8)
+        self.pressure.pack(side="left", padx=theme.PAD)
+        self._label(pressure, "mb").pack(side="left")
+
+        precip = tk.Frame(box, bg=theme.BG)
+        precip.grid(row=2, column=0, sticky="w", pady=(theme.PAD, 0))
+        self._label(precip, "Precipitation").pack(side="left")
+        self.ptype, pmenu = self._menu(precip, _PRECIP_TYPES)
+        pmenu.pack(side="left", padx=(theme.PAD, 4))
+        self.pint, imenu = self._menu(precip, _INTENSITIES)
+        imenu.pack(side="left")
+
+        visibility = tk.Frame(box, bg=theme.BG)
+        visibility.grid(row=3, column=0, sticky="w", pady=(theme.PAD, 0))
+        self._label(visibility, "Visibility").pack(side="left")
+        self.vis, vmenu = self._menu(visibility, _VISIBILITY)
+        vmenu.pack(side="left", padx=theme.PAD)
         return box
 
     def collect(self) -> dict:
@@ -243,16 +314,24 @@ class RadioGroup(_Group):
 
     def build(self, parent):
         box = self._box(parent)
-        self._label(box, "Channel").grid(row=0, column=0, sticky="e")
-        self.channel = self._entry(box, width=12)
-        self.channel.grid(row=0, column=1, padx=theme.PAD)
-        self._label(box, "Station").grid(row=1, column=0, sticky="e")
-        self.station = self._entry(box, width=18)
-        self.station.grid(row=1, column=1, padx=theme.PAD)
+        self._label(box, "Channel").grid(row=0, column=0, sticky="e", pady=2)
+        self.channel = self._entry(box, width=26)          # matched width
+        self.channel.grid(row=0, column=1, padx=theme.PAD, sticky="w", pady=2)
+        self._label(box, "Caller / station").grid(row=1, column=0, sticky="e", pady=2)
+        self.station = self._entry(box, width=26)          # matched width
+        self.station.grid(row=1, column=1, padx=theme.PAD, sticky="w", pady=2)
+        self._label(box, "Message").grid(row=2, column=0, sticky="ne", pady=2)
+        self.message = _text_box(self.app, box, height=4, width=42)
+        self.message.grid(row=2, column=1, padx=theme.PAD, sticky="w", pady=2)
         return box
 
     def collect(self) -> dict:
-        return {"radio_channel": _opt_entry(self.channel), "radio_station": _opt_entry(self.station)}
+        # The message body lives in `remarks`. The renderer already appends it,
+        # which is exactly how the scope's own example line reads (§6.1):
+        #   15:14  RADIO  VHF 16 · Solent CG · Pan Pan relay…
+        return {"radio_channel": _opt_entry(self.channel),
+                "radio_station": _opt_entry(self.station),
+                "remarks": _text_value(self.message)}
 
 
 class RemarksGroup(_Group):
@@ -261,12 +340,12 @@ class RemarksGroup(_Group):
 
     def build(self, parent):
         box = self._box(parent)
-        self.remarks = self._entry(box, width=48)
-        self.remarks.grid(row=0, column=0, padx=theme.PAD, pady=theme.PAD)
+        self.remarks = _text_box(self.app, box, height=5, width=60)
+        self.remarks.pack(fill="both", expand=True, padx=theme.PAD, pady=theme.PAD)
         return box
 
     def collect(self) -> dict:
-        return {"remarks": _opt_entry(self.remarks)}
+        return {"remarks": _text_value(self.remarks)}
 
 
 def _opt_entry(entry):
@@ -513,6 +592,17 @@ def _labelled_box(app, parent, text):
                          padx=theme.PAD, pady=theme.PAD)
 
 
+def _comment_box(app, parent, *, height=2, width=50):
+    """A 'Comments' line for a retrospective engine action."""
+    line = tk.Frame(parent, bg=theme.BG)
+    line.pack(fill="x", pady=(theme.PAD, 0))
+    tk.Label(line, text="Comments", bg=theme.BG, fg=theme.FG_MUTED,
+             font=app.font_small).pack(side="left", anchor="n")
+    box = _text_box(app, line, height=height, width=width)
+    box.pack(side="left", padx=theme.PAD)
+    return box
+
+
 class DepartArriveForm(tk.Frame):
     """Depart/Arrive: time, auto position (suppressed if back-dated), place name
     with autocomplete, remarks. The button's state is derived, not stored (§6.4)."""
@@ -546,18 +636,20 @@ class DepartArriveForm(tk.Frame):
                            activebackground=theme.ACCENT, font=app.font_base)
             menu.grid(row=0, column=2, padx=2)
         tk.Label(body, text="Remarks", bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).grid(row=1, column=0, sticky="e", pady=(theme.PAD, 0))
-        self.remarks = _plain_entry(app, body, width=40)
+                 font=app.font_small).grid(row=1, column=0, sticky="ne", pady=(theme.PAD, 0))
+        self.remarks = _text_box(app, body, height=4, width=44)
         self.remarks.grid(row=1, column=1, columnspan=2, padx=theme.PAD, sticky="w",
                           pady=(theme.PAD, 0))
 
-        tk.Label(self, text=("Position, COG and SOG are captured automatically — and "
-                             "suppressed if the time is materially back-dated. The named "
-                             "place is what carries the record then; a location is never "
-                             "fabricated."),
-                 bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small,
-                 wraplength=theme.DEFAULT_W - 60, justify="left").pack(
-            fill="x", padx=theme.PAD, pady=theme.PAD)
+        tk.Label(self, text="Date, time and Lat/Long are added automatically.",
+                 bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(
+            anchor="w", padx=theme.PAD, pady=(theme.PAD, 0))
+        # Speaks up only when it must: a materially back-dated event gets no
+        # position, and the skipper should know that before saving, not after.
+        self._backdate_note = tk.Label(self, text="", bg=theme.BG, fg=theme.WARN,
+                                       font=app.font_small)
+        self._backdate_note.pack(anchor="w", padx=theme.PAD)
+        self.time_entry.bind("<KeyRelease>", self._check_backdate)
 
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
@@ -568,6 +660,13 @@ class DepartArriveForm(tk.Frame):
         self.location.delete(0, "end")
         self.location.insert(0, value)
 
+    def _check_backdate(self, _event=None):
+        when = _parse_time_field(self.time_entry.get(), self.app.tz)
+        behind = (datetime.now(timezone.utc) - when).total_seconds()
+        self._backdate_note.configure(
+            text=("Back-dated — no position will be recorded for this event."
+                  if behind > self.app.backdate_tolerance_sec else ""))
+
     def _cancel(self):
         self.app.show_session(self.session)
 
@@ -575,7 +674,7 @@ class DepartArriveForm(tk.Frame):
         when = _parse_time_field(self.time_entry.get(), self.app.tz)
         write_event(self.app, self.session, when=when, event_kind=self.kind,
                     location_name=_opt_entry(self.location),
-                    remarks=_opt_entry(self.remarks))
+                    remarks=_text_value(self.remarks))
         self.app.show_session(self.session)
 
 
@@ -602,35 +701,48 @@ class EngineFormView(tk.Frame):
         if running:
             box = _labelled_box(app, body, "Stop (back-dated)")
             box.pack(fill="x", pady=theme.PAD)
-            self.stop_time = _time_entry(app, box)
+            line = tk.Frame(box, bg=theme.BG)
+            line.pack(fill="x")
+            tk.Label(line, text="Stop at", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left")
+            self.stop_time = _time_entry(app, line)
             self.stop_time.pack(side="left", padx=theme.PAD)
-            _big_button(box, "Stop", self._stop).pack(side="left", padx=theme.PAD)
+            _big_button(line, "Stop", self._stop).pack(side="left", padx=theme.PAD)
+            self.stop_notes = _comment_box(app, box)
         else:
             box = _labelled_box(app, body, "Start (back-dated)")
             box.pack(fill="x", pady=theme.PAD)
-            self.start_time = _time_entry(app, box)
+            line = tk.Frame(box, bg=theme.BG)
+            line.pack(fill="x")
+            tk.Label(line, text="Start at", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left")
+            self.start_time = _time_entry(app, line)
             self.start_time.pack(side="left", padx=theme.PAD)
-            _big_button(box, "Start", self._start).pack(side="left", padx=theme.PAD)
+            _big_button(line, "Start", self._start).pack(side="left", padx=theme.PAD)
+            self.start_notes = _comment_box(app, box)
 
             box2 = _labelled_box(app, body, "Add completed run")
             box2.pack(fill="x", pady=theme.PAD)
-            tk.Label(box2, text="Duration min", bg=theme.BG, fg=theme.FG_MUTED,
+            line2 = tk.Frame(box2, bg=theme.BG)
+            line2.pack(fill="x")
+            tk.Label(line2, text="Duration", bg=theme.BG, fg=theme.FG_MUTED,
                      font=app.font_small).pack(side="left")
-            self.duration = _plain_entry(app, box2, width=6)
-            self.duration.pack(side="left", padx=(2, theme.PAD))
-            tk.Label(box2, text="or from", bg=theme.BG, fg=theme.FG_MUTED,
+            self.duration = _plain_entry(app, line2, width=6)
+            self.duration.pack(side="left", padx=4)
+            tk.Label(line2, text="min     or  from", bg=theme.BG, fg=theme.FG_MUTED,
                      font=app.font_small).pack(side="left")
-            self.from_time = _plain_entry(app, box2, width=6)
-            self.from_time.pack(side="left", padx=2)
-            tk.Label(box2, text="to", bg=theme.BG, fg=theme.FG_MUTED,
+            self.from_time = _plain_entry(app, line2, width=6)
+            self.from_time.pack(side="left", padx=4)
+            tk.Label(line2, text="to", bg=theme.BG, fg=theme.FG_MUTED,
                      font=app.font_small).pack(side="left")
-            self.to_time = _plain_entry(app, box2, width=6)
-            self.to_time.pack(side="left", padx=2)
-            _big_button(box2, "Add run", self._add_completed).pack(side="left", padx=theme.PAD)
+            self.to_time = _plain_entry(app, line2, width=6)
+            self.to_time.pack(side="left", padx=4)
+            _big_button(line2, "Add run", self._add_completed).pack(side="left", padx=theme.PAD)
+            self.run_notes = _comment_box(app, box2)
 
         box3 = _labelled_box(app, body, "Issue (remarks required)")
         box3.pack(fill="x", pady=theme.PAD)
-        self.issue = _plain_entry(app, box3, width=44)
+        self.issue = _text_box(app, box3, height=3, width=50)
         self.issue.pack(side="left", padx=theme.PAD)
         _big_button(box3, "Log issue", self._log_issue).pack(side="left", padx=theme.PAD)
 
@@ -655,49 +767,53 @@ class EngineFormView(tk.Frame):
 
     def _start(self):
         when = _parse_time_field(self.start_time.get(), self.app.tz)
+        notes = _text_value(self.start_notes)
         try:
-            result = engine.start(self.app.d, when, session_id=self.session["id"])
+            result = engine.start(self.app.d, when, session_id=self.session["id"],
+                                  notes=notes)
         except engine.EngineError as exc:
             self._banner.configure(text=str(exc), fg=theme.BAD)
             return
         write_event(self.app, self.session, when=when, event_kind="engine_on",
-                    engine_run_id=result.run_id)
+                    engine_run_id=result.run_id, remarks=notes)
         self._finish(result)
 
     def _stop(self):
         when = _parse_time_field(self.stop_time.get(), self.app.tz)
+        notes = _text_value(self.stop_notes)
         try:
-            result = engine.stop(self.app.d, when)
+            result = engine.stop(self.app.d, when, notes=notes)
         except engine.EngineError as exc:
             self._banner.configure(text=str(exc), fg=theme.BAD)
             return
         write_event(self.app, self.session, when=when, event_kind="engine_off",
-                    engine_run_id=result.run_id)
+                    engine_run_id=result.run_id, remarks=notes)
         self._finish(result)
 
     def _add_completed(self):
         started_txt, stopped_txt = self.from_time.get().strip(), self.to_time.get().strip()
+        notes = _text_value(self.run_notes)
         when = datetime.now(timezone.utc)
         try:
             if started_txt and stopped_txt:
                 started = _parse_time_field(started_txt, self.app.tz)
                 stopped = _parse_time_field(stopped_txt, self.app.tz)
                 result = engine.add_completed(self.app.d, started=started, stopped=stopped,
-                                              session_id=self.session["id"])
+                                              session_id=self.session["id"], notes=notes)
                 when = stopped
             else:
                 result = engine.add_completed(self.app.d, duration_min=_num(self.duration.get()),
-                                              session_id=self.session["id"])
+                                              session_id=self.session["id"], notes=notes)
         except engine.EngineError as exc:
             self._banner.configure(text=str(exc), fg=theme.BAD)
             return
         write_event(self.app, self.session, when=when, event_kind="engine_duration",
                     engine_run_id=result.run_id,
-                    remarks=f"{result.duration_min:g} min run logged")
+                    remarks=notes or f"{result.duration_min:g} min run logged")
         self._finish(result)
 
     def _log_issue(self):
-        text = _opt_entry(self.issue)
+        text = _text_value(self.issue)
         if not text:   # an issue with no description is nothing (§6.5)
             self._banner.configure(
                 text="remarks are required — an issue with no description is nothing",
@@ -718,35 +834,70 @@ def engine_form(parent, app, session):
 
 # -- sessions -----------------------------------------------------------------
 
+# Variation is handled separately: it needs an E/W selector, not a typed sign.
 _SESSION_FIELDS = (
     ("departed_from", "From"),
     ("bound_for", "Bound for"),
     ("skipper", "Skipper"),
     ("crew", "Crew"),
-    ("variation_deg", "Variation °"),
-    ("log_start_nm", "Log reading (start)"),
+    ("log_start_nm", "Log reading (start), nm"),
 )
-_SESSION_NUMERIC = ("variation_deg", "log_start_nm", "log_end_nm")
+_SESSION_NUMERIC = ("log_start_nm", "log_end_nm")
+_ALL_SESSION_COLUMNS = tuple(col for col, _ in _SESSION_FIELDS) + ("variation_deg",)
 
 
 def _build_session_fields(app, parent, values):
+    """Returns {column: widget}; ``variation_deg`` maps to an (entry, E/W var) pair."""
     entries = {}
-    for i, (col, label) in enumerate(_SESSION_FIELDS):
+    row = 0
+    for col, label in _SESSION_FIELDS:
         tk.Label(parent, text=label, bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).grid(row=i, column=0, sticky="e", pady=2)
+                 font=app.font_small).grid(row=row, column=0, sticky="e", pady=2)
         entry = _plain_entry(app, parent, width=30)
         value = (values or {}).get(col)
         if value is not None:
             entry.insert(0, f"{value:g}" if isinstance(value, float) else str(value))
-        entry.grid(row=i, column=1, padx=theme.PAD, pady=2, sticky="w")
+        entry.grid(row=row, column=1, padx=theme.PAD, pady=2, sticky="w")
         entries[col] = entry
+        row += 1
+
+    # Magnetic variation: a magnitude plus E/W. Nobody should have to type a
+    # degree sign, nor remember a sign convention. Stored East-positive /
+    # West-negative — the standard, since True = Magnetic + easterly variation.
+    tk.Label(parent, text="Variation", bg=theme.BG, fg=theme.FG_MUTED,
+             font=app.font_small).grid(row=row, column=0, sticky="e", pady=2)
+    holder = tk.Frame(parent, bg=theme.BG)
+    holder.grid(row=row, column=1, padx=theme.PAD, pady=2, sticky="w")
+    magnitude = _plain_entry(app, holder, width=6)
+    magnitude.pack(side="left")
+    tk.Label(holder, text="°", bg=theme.BG, fg=theme.FG_MUTED,
+             font=app.font_base).pack(side="left", padx=(2, theme.PAD))
+    hemisphere = tk.StringVar(value="W")
+    menu = tk.OptionMenu(holder, hemisphere, "E", "W")
+    menu.configure(bg=theme.BG_BUTTON, fg=theme.FG, highlightthickness=0,
+                   activebackground=theme.ACCENT, font=app.font_base)
+    menu.pack(side="left")
+    tk.Label(holder, text="  (e.g. 2 °W)", bg=theme.BG, fg=theme.FG_MUTED,
+             font=app.font_small).pack(side="left")
+
+    stored = (values or {}).get("variation_deg")
+    if stored is not None:
+        magnitude.insert(0, f"{abs(float(stored)):g}")
+        hemisphere.set("E" if float(stored) >= 0 else "W")
+    entries["variation_deg"] = (magnitude, hemisphere)
     return entries
 
 
 def _collect_session_fields(entries) -> dict:
     out = {}
-    for col, entry in entries.items():
-        text = entry.get().strip()
+    for col, widget in entries.items():
+        if col == "variation_deg":
+            magnitude, hemisphere = widget
+            value = _num(magnitude.get())
+            out[col] = None if value is None else (
+                abs(value) if hemisphere.get() == "E" else -abs(value))
+            continue
+        text = widget.get().strip()
         out[col] = None if not text else (_num(text) if col in _SESSION_NUMERIC else text)
     return out
 
@@ -794,8 +945,13 @@ class SessionStartView(tk.Frame):
 
     def _open(self, **fields):
         d = self.app.d
-        d.create_session(opened_utc=db.to_iso_utc(datetime.now(timezone.utc)), **fields)
-        self.app.show_session(d.open_session())
+        now = datetime.now(timezone.utc)
+        d.create_session(opened_utc=db.to_iso_utc(now), **fields)
+        session = d.open_session()
+        # The log should say it was opened — otherwise the first line of a
+        # session is whatever happened to be recorded next.
+        write_event(self.app, session, when=now, event_kind="session_open")
+        self.app.show_session(session)
 
     def _start(self):
         self._open(**_collect_session_fields(self.entries))
@@ -817,7 +973,7 @@ class SessionEditView(tk.Frame):
         body = tk.Frame(self, bg=theme.BG)
         body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
         self.entries = _build_session_fields(
-            app, body, {col: session[col] for col, _ in _SESSION_FIELDS})
+            app, body, {col: session[col] for col in _ALL_SESSION_COLUMNS})
 
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
@@ -854,14 +1010,14 @@ class EndSessionView(tk.Frame):
 
         body = tk.Frame(self, bg=theme.BG)
         body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
-        tk.Label(body, text="Log reading (end)", bg=theme.BG, fg=theme.FG_MUTED,
+        tk.Label(body, text="Log reading (end), nm", bg=theme.BG, fg=theme.FG_MUTED,
                  font=app.font_small).grid(row=0, column=0, sticky="e", pady=2)
         self.log_end = _plain_entry(app, body, width=12)
         self.log_end.grid(row=0, column=1, padx=theme.PAD, sticky="w")
         tk.Label(body, text="Notes", bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).grid(row=1, column=0, sticky="e", pady=2)
-        self.notes = _plain_entry(app, body, width=48)
-        self.notes.grid(row=1, column=1, padx=theme.PAD, sticky="w")
+                 font=app.font_small).grid(row=1, column=0, sticky="ne", pady=2)
+        self.notes = _text_box(app, body, height=6, width=56)
+        self.notes.grid(row=1, column=1, padx=theme.PAD, sticky="w", pady=2)
 
         self.engine_choice = tk.StringVar(value="stop")
         if self.engine_running:
@@ -920,7 +1076,7 @@ class EndSessionView(tk.Frame):
         d.set_autolog_active(self.session["id"], False)
         d.close_session(self.session["id"], closed_utc=db.to_iso_utc(now),
                         log_end_nm=_num(self.log_end.get()),
-                        notes=_opt_entry(self.notes))
+                        notes=_text_value(self.notes))
         # Closing a session triggers the CSV export and a verified backup (§6.2,
         # §3.6). The outcome is surfaced on the launch view: a silent backup
         # failure would be the worst possible outcome (§10.3).

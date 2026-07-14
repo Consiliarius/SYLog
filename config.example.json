@@ -17,6 +17,9 @@
     "backdate_tolerance_sec": 60,
     "clock_offset_warn_sec": 60
   },
+  "ui": {
+    "theme": "light"
+  },
   "backup": {
     "retention": 10
   },
