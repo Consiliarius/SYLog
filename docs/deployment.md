@@ -59,6 +59,91 @@ network dependency" property.
   risk (local backups remain valid) but it will look like one at the worst
   moment.
 
+## Test deployment, step by step
+
+> **Gate:** the reference netbook had a thermal fault (since corrected) and, before
+> that, unexplained segfaults. A sustained OpenCPN soak test was to confirm they
+> had stopped. **Confirm that soak test came back clean before trusting a run
+> here** — otherwise a crash is ambiguous between a code bug and bad hardware.
+
+**1. System packages.** `python3-tk` is *not* installed by a netinstall.
+
+```bash
+sudo apt install python3 python3-tk gpsd gpsd-clients git chrony
+python3 --version          # 3.9 or newer (zoneinfo)
+```
+
+**2. Get the code.** The repository is private, so this needs authentication —
+either the GitHub CLI, or an SSH deploy key:
+
+```bash
+gh auth login && gh repo clone Consiliarius/SYLog     # or:
+git clone git@github.com:Consiliarius/SYLog.git
+cd SYLog
+```
+
+**3. Run the tests first.** They need nothing installed (stdlib `unittest`) and
+prove the build is sound on this machine before any real data exists:
+
+```bash
+python3 -m unittest discover -s tests -t .            # expect: OK
+python3 -m logbook --check                            # builds the window, exits
+```
+
+**4. Configure.** `config.json` is gitignored and machine-specific:
+
+```bash
+cp config.example.json config.json
+$EDITOR config.json        # vessel name, sails, engine_hours_baseline, paths
+```
+
+**The working database must NOT live inside the backup directory** — the tool
+refuses to start if it does (sync clients corrupt live SQLite databases). Keep
+`paths.database` at something like `~/logbook/logbook.db` and `paths.backup_dir`
+somewhere else entirely.
+
+**5. Confirm gpsd is serving a fix.**
+
+```bash
+cgps -s                    # or: gpspipe -w -n 5
+```
+
+**6. Dry-run against the mock first** — gpsd already holds port 2947, so give the
+mock its own port. This exercises the failure paths that real hardware will not
+reproduce on demand:
+
+```bash
+python3 tools/mock_gpsd.py --scenario nominal --port 3947 &
+python3 -m logbook --db ~/logbook/test.db --port 3947
+# also try: --scenario no-fix | stale | 2d | drop
+```
+
+**7. Then run against the real gpsd** (defaults to `localhost:2947`). Use a
+throwaway database for the test so the real logbook stays clean:
+
+```bash
+python3 -m logbook --db ~/logbook/test.db
+```
+
+**F11** toggles fullscreen, for alt-tabbing with a fullscreen OpenCPN.
+
+**8. What to exercise.** Start a session (or Skip) · arm Auto-log · Depart ·
+press Engine ▶ and ■ · record an Observation, Sail, Radio, Multi… · Arrive ·
+End Session. Closing the session writes the four CSVs **and** a verified,
+timestamped `.db` snapshot into `backup_dir`, and reports the outcome on the
+launch screen. Check they are there:
+
+```bash
+ls -l "$(python3 - <<'PY'
+import json,os;print(os.path.expanduser(json.load(open("config.json"))["paths"]["backup_dir"]))
+PY
+)"
+```
+
+**9. When it is real.** Drop `--db`, so the tool uses `paths.database` from
+config, and set up chrony + the gpsd SHM refclock (below) so the system clock is
+disciplined from GPS.
+
 ## Reference platform
 
 Acer Aspire One 522 — AMD C-50 (2 × 1.0 GHz, 9 W), 4 GB RAM, Debian, OpenCPN

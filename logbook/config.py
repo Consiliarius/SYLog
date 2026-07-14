@@ -96,6 +96,14 @@ class Config:
     def clock_offset_warn_sec(self) -> float:
         return self._logging("clock_offset_warn_sec", 60)
 
+    # -- backup ---------------------------------------------------------------
+
+    @property
+    def backup_retention(self) -> int:
+        """How many timestamped snapshots to keep (§3.6). Defaults if absent, so
+        a config written before this key existed still loads."""
+        return int(self._data.get("backup", {}).get("retention", 10))
+
 
 def load(config_path: str | Path, *, example_path: str | Path) -> Config:
     """Load config.json, copying the example on first run."""

@@ -17,6 +17,9 @@
     "backdate_tolerance_sec": 60,
     "clock_offset_warn_sec": 60
   },
+  "backup": {
+    "retention": 10
+  },
   "paths": {
     "database": "~/logbook/logbook.db",
     "backup_dir": "~/OneDrive/logbook/"

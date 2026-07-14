@@ -98,10 +98,16 @@ class App:
         distance_sample_sec: float = 30.0,
         distance_persist_min: float = 5.0,
         speed_gate_kn: float = 0.5,
+        db_path=None,
+        backup_dir=None,
+        backup_retention: int = 10,
         start_reader: bool = True,
     ) -> None:
         self.d = d
         self.sails = sails
+        self.db_path = db_path
+        self.backup_dir = backup_dir
+        self.backup_retention = backup_retention
         self.backdate_tolerance_sec = backdate_tolerance_sec
         self.autolog_interval_min = autolog_interval_min
         self.distance_sample_sec = distance_sample_sec
@@ -228,6 +234,50 @@ class App:
 
     def show_engine_prompt(self) -> None:
         self.views.show(EnginePromptView(self._content, self))
+
+    # -- viewer (step 5) -------------------------------------------------------
+
+    def show_viewer(self, event=None) -> None:
+        from logbook.ui import viewer
+        self.views.show(viewer.ViewerSessionsView(self._content, self))
+
+    def show_viewer_entries(self, session_row) -> None:
+        from logbook.ui import viewer
+        self.views.show(viewer.ViewerEntriesView(self._content, self, session_row))
+
+    def show_viewer_entry(self, session_row, entry_row) -> None:
+        from logbook.ui import viewer
+        self.views.show(viewer.ViewerEntryEditView(self._content, self, session_row, entry_row))
+
+    # -- export + backup on session close (§3.6, §6.2) -------------------------
+
+    def export_and_backup(self, session_id) -> list[str]:
+        """Regenerate the CSVs and take a verified snapshot. Returns notes.
+
+        Failures are reported, never swallowed: the backup routine is a
+        requirement, not a nicety (§10.3), so a silent failure would be the worst
+        possible outcome.
+        """
+        from logbook import backup, export
+        if self.backup_dir is None:
+            return ["no backup directory configured — export and backup skipped"]
+        notes = []
+        try:
+            written = export.export_session(self.d, session_id, self.backup_dir,
+                                            sails=self.sails, tz=self.tz)
+            notes.append(f"CSV exported ({len(written)} files)")
+        except OSError as exc:
+            notes.append(f"CSV export FAILED: {exc}")
+        if self.db_path is None:
+            notes.append("no database path known — backup skipped")
+            return notes
+        try:
+            path = backup.snapshot(self.db_path, self.backup_dir,
+                                   retention=self.backup_retention)
+            notes.append(f"backup written and verified: {path.name}")
+        except (backup.BackupError, OSError) as exc:
+            notes.append(f"backup FAILED: {exc}")
+        return notes
 
     def show_autolog_prompt(self, session_row) -> None:
         self.views.show(AutologPromptView(self._content, self, session_row))
@@ -480,7 +530,7 @@ class LaunchView(tk.Frame):
         self.app.views.show(forms.SessionStartView(self.app._content, self.app))
 
     def _view_log(self) -> None:
-        self.app.show_placeholder("Log viewer — build step 5")
+        self.app.show_viewer()
 
 
 class PlaceholderView(tk.Frame):

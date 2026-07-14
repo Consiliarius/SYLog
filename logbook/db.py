@@ -49,6 +49,18 @@ _SESSION_EDITABLE = (
     "departed_from", "bound_for", "skipper", "crew", "variation_deg",
     "log_start_nm", "log_end_nm", "notes",
 )
+# What the viewer may correct. Provenance columns (category, entry_type,
+# position_source, time_source, recorded_utc) are NOT editable — an edit is
+# marked by edited/edited_utc instead, so a correction never disguises itself
+# as an original observation (§5.4).
+_ENTRY_EDITABLE = (
+    "timestamp_utc",
+    "latitude", "longitude", "cog_deg", "sog_kn",
+    "heading_deg", "heading_ref", "log_nm", "sail_state",
+    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
+    "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
+    "location_name", "radio_channel", "radio_station", "remarks",
+)
 
 # CREATE statements only. PRAGMAs are per-connection and set in connect().
 _SCHEMA = """
@@ -396,6 +408,68 @@ class Database:
             for row in rows:
                 ids.append(self._exec_insert_entry(self.conn, {**row, "group_id": group_id}))
         return group_id, ids
+
+    # -- viewer / export reads (these DELIBERATELY include deleted rows) -------
+
+    def sessions(self, newest_first=True) -> list[sqlite3.Row]:
+        order = "DESC" if newest_first else "ASC"
+        return self.conn.execute(f"SELECT * FROM session ORDER BY id {order}").fetchall()
+
+    def session(self, session_id) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM session WHERE id = ?", (session_id,)).fetchone()
+
+    def entry(self, entry_id) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM entry WHERE id = ?", (entry_id,)).fetchone()
+
+    def session_entries_including_deleted(self, session_id) -> list[sqlite3.Row]:
+        """Every row, deleted included, in id order.
+
+        For the VIEWER (which marks them) and the EXPORT (which flags them) —
+        never for a derived figure. Excluding soft-deleted rows from the CSV
+        would make it *less* complete than the database, inverting the archival
+        relationship (§8).
+        """
+        return self.conn.execute(
+            "SELECT * FROM entry WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
+
+    def engine_runs_including_deleted(self, session_id=None) -> list[sqlite3.Row]:
+        """Export-only. ``session_id=None`` returns every run, all sessions."""
+        if session_id is None:
+            return self.conn.execute("SELECT * FROM engine_run ORDER BY id").fetchall()
+        return self.conn.execute(
+            "SELECT * FROM engine_run WHERE session_id = ? ORDER BY id",
+            (session_id,)).fetchall()
+
+    # -- corrections, not erasures (§5.4) -------------------------------------
+
+    def update_entry(self, entry_id, **fields) -> None:
+        """Correct a row. Sets edited = 1 and edited_utc; the viewer marks it."""
+        unknown = set(fields) - set(_ENTRY_EDITABLE)
+        if unknown:
+            raise ValueError(f"columns are not editable: {sorted(unknown)}")
+        if not fields:
+            return
+        fields = dict(fields, edited=1, edited_utc=to_iso_utc(datetime.now(timezone.utc)))
+        assignments = ", ".join(f"{col} = ?" for col in fields)
+        with self.conn:
+            self.conn.execute(f"UPDATE entry SET {assignments} WHERE id = ?",
+                              [*fields.values(), entry_id])
+
+    def soft_delete_entry(self, entry_id, reason: str) -> None:
+        """Soft delete only — nothing is ever destroyed, and a reason is required.
+
+        Operates per row, not per group: correcting a mis-recorded sail plan must
+        not destroy the position fix taken at the same moment (§5.4).
+        """
+        if not reason or not reason.strip():
+            raise ValueError("a delete reason is required")
+        with self.conn:
+            self.conn.execute(
+                "UPDATE entry SET deleted = 1, deleted_utc = ?, deleted_reason = ? "
+                "WHERE id = ?",
+                (to_iso_utc(datetime.now(timezone.utc)), reason.strip(), entry_id))
 
     def _exec_insert_entry(self, conn, fields) -> int:
         unknown = set(fields) - set(_ENTRY_COLUMNS)

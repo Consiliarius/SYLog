@@ -921,8 +921,10 @@ class EndSessionView(tk.Frame):
         d.close_session(self.session["id"], closed_utc=db.to_iso_utc(now),
                         log_end_nm=_num(self.log_end.get()),
                         notes=_opt_entry(self.notes))
-        # CSV export and backup are triggered from here once export.py and
-        # backup.py exist (§6.2; build steps 4-5).
+        # Closing a session triggers the CSV export and a verified backup (§6.2,
+        # §3.6). The outcome is surfaced on the launch view: a silent backup
+        # failure would be the worst possible outcome (§10.3).
+        self.app.startup_warnings = self.app.export_and_backup(self.session["id"])
         self.app.show_launch()
 
 
