@@ -135,7 +135,8 @@ class AppShellTestCase(unittest.TestCase):
 
     def test_start_session_shows_session_view_and_renders_entries(self):
         from logbook.ui.app import SessionView
-        self.app.views.current._start_session()
+        self.app.views.current._start_session()   # opens the start dialog (§6.2)
+        self.app.views.current._skip()            # Skip opens a session immediately
         self.assertIsInstance(self.app.views.current, SessionView)
         session = self.app.d.open_session()
         self.assertIsNotNone(session)
@@ -153,8 +154,10 @@ class AppShellTestCase(unittest.TestCase):
     def test_end_session_returns_to_launch(self):
         from logbook.ui.app import LaunchView, SessionView
         self.app.views.current._start_session()
+        self.app.views.current._skip()
         self.assertIsInstance(self.app.views.current, SessionView)
-        self.app.views.current._end_session()
+        self.app.views.current._end_session()     # opens the End Session view...
+        self.app.views.current._end()             # ...which is where it is confirmed
         self.assertIsInstance(self.app.views.current, LaunchView)
         self.assertIsNone(self.app.d.open_session())
 

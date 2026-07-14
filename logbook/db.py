@@ -45,6 +45,10 @@ _ENTRY_REQUIRED = (
     "session_id", "timestamp_utc", "time_source", "recorded_utc",
     "entry_type", "category", "position_source",
 )
+_SESSION_EDITABLE = (
+    "departed_from", "bound_for", "skipper", "crew", "variation_deg",
+    "log_start_nm", "log_end_nm", "notes",
+)
 
 # CREATE statements only. PRAGMAs are per-connection and set in connect().
 _SCHEMA = """
@@ -58,6 +62,7 @@ CREATE TABLE session (
     opened_utc      TEXT NOT NULL,
     closed_utc      TEXT,
     closed          INTEGER NOT NULL DEFAULT 0,
+    autolog_active  INTEGER NOT NULL DEFAULT 0,  -- persisted so a restart prompts
     departed_from   TEXT,
     bound_for       TEXT,
     skipper         TEXT,
@@ -309,6 +314,34 @@ class Database:
         return self.conn.execute(
             "SELECT * FROM session WHERE closed = 0 ORDER BY id DESC LIMIT 1"
         ).fetchone()
+
+    def last_session(self) -> sqlite3.Row | None:
+        """The most recent session — the source for autopopulating a new one (§6.2)."""
+        return self.conn.execute(
+            "SELECT * FROM session ORDER BY id DESC LIMIT 1").fetchone()
+
+    def update_session(self, session_id, **fields) -> None:
+        """Edit session details — load-bearing, because Skip opens with nulls (§6.2)."""
+        unknown = set(fields) - set(_SESSION_EDITABLE)
+        if unknown:
+            raise ValueError(f"unknown session columns: {sorted(unknown)}")
+        if not fields:
+            return
+        assignments = ", ".join(f"{col} = ?" for col in fields)
+        with self.conn:
+            self.conn.execute(f"UPDATE session SET {assignments} WHERE id = ?",
+                              [*fields.values(), session_id])
+
+    def set_autolog_active(self, session_id, active: bool) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE session SET autolog_active = ? WHERE id = ?",
+                              (1 if active else 0, session_id))
+
+    def set_session_distance(self, session_id, nm: float) -> None:
+        """Persist the accumulated total only — no track table (§5.5)."""
+        with self.conn:
+            self.conn.execute("UPDATE session SET distance_og_nm = ? WHERE id = ?",
+                              (float(nm), session_id))
 
     def close_session(self, session_id, *, closed_utc, log_end_nm=None,
                       notes=None) -> None:

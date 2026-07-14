@@ -60,18 +60,25 @@ def main(argv: list[str] | None = None) -> None:
     d = db_mod.open_db(db_path)
     warnings = config_mod.sync_baseline(cfg, d)
 
+    tuning = dict(
+        sails=cfg.sails,
+        backdate_tolerance_sec=cfg.backdate_tolerance_sec,
+        autolog_interval_min=cfg.autolog_interval_min,
+        distance_sample_sec=cfg.distance_sample_sec,
+        distance_persist_min=cfg.distance_persist_min,
+        speed_gate_kn=cfg.speed_gate_kn,
+    )
+
     if args.check:
-        app = App(d, host=args.host, port=args.port,
-                  startup_warnings=warnings, sails=cfg.sails,
-                  backdate_tolerance_sec=cfg.backdate_tolerance_sec, start_reader=False)
+        app = App(d, host=args.host, port=args.port, startup_warnings=warnings,
+                  start_reader=False, **tuning)
         app.root.withdraw()
         app.root.update()
         app.root.destroy()
         print("ok: logbook built and torn down cleanly")
         return
 
-    App(d, host=args.host, port=args.port, startup_warnings=warnings,
-        sails=cfg.sails, backdate_tolerance_sec=cfg.backdate_tolerance_sec).run()
+    App(d, host=args.host, port=args.port, startup_warnings=warnings, **tuning).run()
 
 
 if __name__ == "__main__":

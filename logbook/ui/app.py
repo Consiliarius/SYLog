@@ -18,11 +18,13 @@ Spec: §6.1.
 from __future__ import annotations
 
 import queue
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime, timezone
 
 from logbook import db, engine, gps
+from logbook.distance import DistanceAccumulator
 from logbook.ui import render, theme
 
 GPS_TICK_MS = 250
@@ -92,11 +94,26 @@ class App:
         startup_warnings: list[str] | None = None,
         sails: list[dict] | None = None,
         backdate_tolerance_sec: float = 60.0,
+        autolog_interval_min: float = 30.0,
+        distance_sample_sec: float = 30.0,
+        distance_persist_min: float = 5.0,
+        speed_gate_kn: float = 0.5,
         start_reader: bool = True,
     ) -> None:
         self.d = d
         self.sails = sails
         self.backdate_tolerance_sec = backdate_tolerance_sec
+        self.autolog_interval_min = autolog_interval_min
+        self.distance_sample_sec = distance_sample_sec
+        self.distance_persist_min = distance_persist_min
+        self.speed_gate_kn = speed_gate_kn
+
+        # Distance is accumulated in memory; only the total is persisted (§5.5).
+        self.accumulator: DistanceAccumulator | None = None
+        self._acc_session_id: int | None = None
+        self._last_persist = time.monotonic()
+        self._engine_prompt_shown = False
+        self._autolog_prompt_shown = False
         self.tz = datetime.now(timezone.utc).astimezone().tzinfo  # system local, for display
         self.startup_warnings = list(startup_warnings or [])
         self.gps_queue: queue.Queue = queue.Queue()
@@ -108,16 +125,13 @@ class App:
         self._init_window()
         self._build_chrome()
         self.views = ViewManager(self._content)
-        # A run left open across a restart accrues hours it may never have run —
-        # the more dangerous failure. Surface it; never accept it silently (§6.5).
-        if engine.timer_state(d).status is engine.TimerStatus.RUNNING:
-            self.show_engine_prompt()
-        else:
-            self.show_launch()
+        self.show_startup()
 
         if start_reader:
             self.reader.start()
             self._schedule_pump()
+            self._schedule_autolog()
+            self._schedule_distance()
 
     # -- setup ----------------------------------------------------------------
 
@@ -215,6 +229,83 @@ class App:
     def show_engine_prompt(self) -> None:
         self.views.show(EnginePromptView(self._content, self))
 
+    def show_autolog_prompt(self, session_row) -> None:
+        self.views.show(AutologPromptView(self._content, self, session_row))
+
+    def show_startup(self) -> None:
+        """Surface anything left unresolved by a crash, one prompt at a time.
+
+        Each prompt is shown at most once per run, so an explicit "leave it as it
+        is" answer cannot loop us back into the same question.
+        """
+        if not self._engine_prompt_shown and \
+                engine.timer_state(self.d).status is engine.TimerStatus.RUNNING:
+            self._engine_prompt_shown = True
+            self.show_engine_prompt()
+            return
+        session = self.d.open_session()
+        if not self._autolog_prompt_shown and session is not None and session["autolog_active"]:
+            self._autolog_prompt_shown = True
+            self.show_autolog_prompt(session)
+            return
+        self.show_launch()
+
+    # -- background writers ---------------------------------------------------
+
+    def _schedule_autolog(self) -> None:
+        self.root.after(int(self.autolog_interval_min * 60_000), self._autolog_tick)
+
+    def _autolog_tick(self) -> None:
+        session = self.d.open_session()
+        if session is not None and session["autolog_active"]:
+            write_autolog_entry(self, session)
+            current = self.views.current
+            if isinstance(current, SessionView):
+                current.refresh_log()
+        self._schedule_autolog()
+
+    def _schedule_distance(self) -> None:
+        self.root.after(int(self.distance_sample_sec * 1000), self._distance_tick)
+
+    def _distance_tick(self) -> None:
+        self.sample_distance()
+        self._schedule_distance()
+
+    def sample_distance(self) -> None:
+        """One gated position sample into the in-memory accumulator (§5.5)."""
+        session = self.d.open_session()
+        if session is None:
+            self.accumulator = None
+            self._acc_session_id = None
+            return
+        if self.accumulator is None or self._acc_session_id != session["id"]:
+            # Resume from the persisted total: a crash loses minutes, not hours.
+            self.accumulator = DistanceAccumulator(
+                speed_gate_kn=self.speed_gate_kn,
+                initial_nm=session["distance_og_nm"] or 0.0)
+            self._acc_session_id = session["id"]
+            self._last_persist = time.monotonic()
+
+        # Under way == departed and not yet arrived, derived from the events.
+        under_way = passage_next_kind(self.d, session["id"]) == "arrival"
+        fix = self.gps_state.fix
+        usable = self.gps_state.classify() in ("FIX", "2D") and fix is not None
+        self.accumulator.sample(
+            lat=fix.lat if usable else None,
+            lon=fix.lon if usable else None,
+            sog_kn=fix.sog_kn if usable else None,
+            fix_mode=fix.mode if usable else None,
+            under_way=under_way,
+        )
+        if time.monotonic() - self._last_persist >= self.distance_persist_min * 60:
+            self.d.set_session_distance(session["id"], self.accumulator.total_nm)
+            self._last_persist = time.monotonic()
+
+    def persist_distance(self) -> None:
+        """Flush the accumulated total — called when a session is closed."""
+        if self.accumulator is not None and self._acc_session_id is not None:
+            self.d.set_session_distance(self._acc_session_id, self.accumulator.total_nm)
+
     def run(self) -> None:
         self.root.mainloop()
 
@@ -282,6 +373,32 @@ def write_event(app, session, *, when: datetime, event_kind: str, **extra) -> in
         entry_type="event", category="event", event_kind=event_kind)
     fields.update(event_position_fields(app, when))
     fields.update({k: v for k, v in extra.items() if v is not None})
+    return app.d.insert_entry(**fields)
+
+
+def write_autolog_entry(app, session) -> int:
+    """One auto-log fix (§6.3): timestamp, position, COG, SOG, fix_mode.
+
+    With no valid fix the position is SUPPRESSED, not faked — but the row is
+    still written, so the gap in the track is explicable afterwards rather than
+    simply missing. No sail state, no weather, no heading: nothing is inferred.
+    """
+    now = datetime.now(timezone.utc)
+    fix = app.gps_state.fix
+    usable = app.gps_state.classify() in ("FIX", "2D") and fix is not None and fix.has_position
+    fields = dict(
+        session_id=session["id"], recorded_utc=db.to_iso_utc(now),
+        entry_type="auto", category="auto", position_source="none",
+        timestamp_utc=db.to_iso_utc(now), time_source="system")
+    if usable:
+        if fix.time is not None:            # GPS time is authoritative (§3.4)
+            fields.update(timestamp_utc=db.to_iso_utc(fix.time), time_source="gps")
+        fields.update(latitude=fix.lat, longitude=fix.lon, position_source="gps",
+                      fix_mode=fix.mode, cog_deg=fix.cog_deg, sog_kn=fix.sog_kn)
+    else:
+        fields["remarks"] = "no valid fix — position suppressed"
+        if fix is not None:
+            fields["fix_mode"] = fix.mode
     return app.d.insert_entry(**fields)
 
 
@@ -356,10 +473,11 @@ class LaunchView(tk.Frame):
     def _start_session(self) -> None:
         d = self.app.d
         session = d.open_session()
-        if session is None:  # Skip-style immediate open (rich start dialog is later)
-            d.create_session(opened_utc=db.to_iso_utc(datetime.now(timezone.utc)))
-            session = d.open_session()
-        self.app.show_session(session)
+        if session is not None:
+            self.app.show_session(session)          # resume
+            return
+        from logbook.ui import forms
+        self.app.views.show(forms.SessionStartView(self.app._content, self.app))
 
     def _view_log(self) -> None:
         self.app.show_placeholder("Log viewer — build step 5")
@@ -390,12 +508,16 @@ class SessionView(tk.Frame):
         # Row 1: two-state controls, state derived from the database (invariant 3).
         bar1 = tk.Frame(self, bg=theme.BG_PANEL)
         bar1.pack(side="top", fill="x")
+        self._autolog_btn = _big_button(bar1, "Auto-log ▶", self._toggle_autolog, width=12)
+        self._autolog_btn.pack(side="left", padx=theme.PAD, pady=theme.PAD)
         self._passage_btn = _big_button(bar1, "Depart", self._passage, width=10)
-        self._passage_btn.pack(side="left", padx=theme.PAD, pady=theme.PAD)
+        self._passage_btn.pack(side="left", padx=2, pady=theme.PAD)
         self._engine_btn = _big_button(bar1, "Engine ▶", self._toggle_engine, width=12)
         self._engine_btn.pack(side="left", padx=2, pady=theme.PAD)
         _big_button(bar1, "End Session", self._end_session).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(bar1, "Details", self._details).pack(
+            side="right", padx=2, pady=theme.PAD)
 
         # Row 2: entry presets, plus retrospective Engine…
         bar2 = tk.Frame(self, bg=theme.BG_PANEL)
@@ -435,6 +557,10 @@ class SessionView(tk.Frame):
         kind = passage_next_kind(d, self.session["id"])
         self._passage_btn.configure(text="Depart" if kind == "departure" else "Arrive")
 
+        row = d.open_session()
+        active = bool(row["autolog_active"]) if row is not None else False
+        self._autolog_btn.configure(text="Auto-log ■" if active else "Auto-log ▶")
+
         state = engine.timer_state(d)
         if state.status is engine.TimerStatus.RUNNING:
             elapsed = engine.elapsed_minutes(state.run, datetime.now(timezone.utc))
@@ -448,6 +574,21 @@ class SessionView(tk.Frame):
 
     def _passage(self) -> None:
         self.app.show_form("depart_arrive_form", self.session)
+
+    def _details(self) -> None:
+        self.app.show_form("session_edit_form", self.session)
+
+    def _toggle_autolog(self) -> None:
+        d = self.app.d
+        session = d.open_session()
+        if session is None:
+            return
+        active = bool(session["autolog_active"])
+        d.set_autolog_active(session["id"], not active)
+        if not active:                     # just armed — record the moment it started
+            write_autolog_entry(self.app, d.open_session())
+        self.refresh_controls()
+        self.refresh_log()
 
     def _toggle_engine(self) -> None:
         """Live button: press = instant write. No form, no time selector (§6.5)."""
@@ -474,9 +615,7 @@ class SessionView(tk.Frame):
         self.refresh_log()
 
     def _end_session(self) -> None:
-        self.app.d.close_session(
-            self.session["id"], closed_utc=db.to_iso_utc(datetime.now(timezone.utc)))
-        self.app.show_launch()
+        self.app.show_form("end_session_form", self.session)
 
     def _observation(self) -> None:
         self.app.show_observation_form(self.session)
@@ -520,7 +659,7 @@ class EnginePromptView(tk.Frame):
         self._banner.pack(pady=theme.PAD)
 
     def _still_running(self) -> None:
-        self.app.show_launch()      # explicit acceptance; the run stays open
+        self.app.show_startup()     # explicit acceptance; the run stays open
 
     def _stopped_at(self) -> None:
         from logbook.ui.forms import _parse_time_field
@@ -530,4 +669,36 @@ class EnginePromptView(tk.Frame):
         except engine.EngineError as exc:
             self._banner.configure(text=str(exc))
             return
-        self.app.show_launch()
+        self.app.show_startup()
+
+
+class AutologPromptView(tk.Frame):
+    """Auto-log was running when the process died — resume, or stop it?
+
+    Persisted on the session and surfaced here rather than silently resumed or
+    silently dropped: both would decide something the skipper did not.
+    """
+
+    def __init__(self, parent, app: App, session_row) -> None:
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session_row
+
+        tk.Label(self, text="Auto-log was running", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(pady=(theme.PAD * 5, theme.PAD))
+        tk.Label(self, text=("This session had auto-log armed when the tool last stopped. "
+                             f"It writes a fix every {app.autolog_interval_min:g} minutes."),
+                 bg=theme.BG, fg=theme.WARN, font=app.font_base,
+                 wraplength=theme.DEFAULT_W - 80, justify="center").pack(pady=theme.PAD)
+
+        row = tk.Frame(self, bg=theme.BG)
+        row.pack(pady=theme.PAD * 3)
+        _big_button(row, "Resume auto-log", self._resume).pack(side="left", padx=theme.PAD)
+        _big_button(row, "Stop auto-log", self._stop).pack(side="left", padx=theme.PAD)
+
+    def _resume(self) -> None:
+        self.app.show_startup()      # flag stays set; the timer picks it up
+
+    def _stop(self) -> None:
+        self.app.d.set_autolog_active(self.session["id"], False)
+        self.app.show_startup()

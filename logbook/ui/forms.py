@@ -714,3 +714,221 @@ def depart_arrive_form(parent, app, session):
 
 def engine_form(parent, app, session):
     return EngineFormView(parent, app, session)
+
+
+# -- sessions -----------------------------------------------------------------
+
+_SESSION_FIELDS = (
+    ("departed_from", "From"),
+    ("bound_for", "Bound for"),
+    ("skipper", "Skipper"),
+    ("crew", "Crew"),
+    ("variation_deg", "Variation °"),
+    ("log_start_nm", "Log reading (start)"),
+)
+_SESSION_NUMERIC = ("variation_deg", "log_start_nm", "log_end_nm")
+
+
+def _build_session_fields(app, parent, values):
+    entries = {}
+    for i, (col, label) in enumerate(_SESSION_FIELDS):
+        tk.Label(parent, text=label, bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).grid(row=i, column=0, sticky="e", pady=2)
+        entry = _plain_entry(app, parent, width=30)
+        value = (values or {}).get(col)
+        if value is not None:
+            entry.insert(0, f"{value:g}" if isinstance(value, float) else str(value))
+        entry.grid(row=i, column=1, padx=theme.PAD, pady=2, sticky="w")
+        entries[col] = entry
+    return entries
+
+
+def _collect_session_fields(entries) -> dict:
+    out = {}
+    for col, entry in entries.items():
+        text = entry.get().strip()
+        out[col] = None if not text else (_num(text) if col in _SESSION_NUMERIC else text)
+    return out
+
+
+class SessionStartView(tk.Frame):
+    """Start a session — details autopopulated from the previous one (§6.2).
+
+    Skip opens a session immediately with nulls, which is exactly why 'Details'
+    exists and is load-bearing rather than a convenience.
+    """
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        previous = app.d.last_session()
+        values = {}
+        if previous is not None:
+            values = {
+                "departed_from": previous["bound_for"] or previous["departed_from"],
+                "bound_for": previous["bound_for"],
+                "skipper": previous["skipper"],
+                "crew": previous["crew"],
+                "variation_deg": previous["variation_deg"],
+                "log_start_nm": previous["log_end_nm"],   # the impeller carries on
+            }
+
+        tk.Label(self, text="Start session", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+        if previous is not None:
+            tk.Label(self, text="Autopopulated from the previous session — check each line.",
+                     bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(
+                anchor="w", padx=theme.PAD)
+
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
+        self.entries = _build_session_fields(app, body, values)
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", app.show_launch).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Skip", self._skip).pack(side="right", padx=2, pady=theme.PAD)
+        _big_button(footer, "Start session", self._start).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+
+    def _open(self, **fields):
+        d = self.app.d
+        d.create_session(opened_utc=db.to_iso_utc(datetime.now(timezone.utc)), **fields)
+        self.app.show_session(d.open_session())
+
+    def _start(self):
+        self._open(**_collect_session_fields(self.entries))
+
+    def _skip(self):
+        self._open()      # nulls everywhere; the details can be filled in later
+
+
+class SessionEditView(tk.Frame):
+    """Edit session details — reachable because Skip leaves them null (§6.2)."""
+
+    def __init__(self, parent, app, session):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session
+
+        tk.Label(self, text="Session details", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
+        self.entries = _build_session_fields(
+            app, body, {col: session[col] for col, _ in _SESSION_FIELDS})
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", self._cancel).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Save", self._save).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+
+    def _cancel(self):
+        self.app.show_session(self.session)
+
+    def _save(self):
+        self.app.d.update_session(self.session["id"], **_collect_session_fields(self.entries))
+        self.app.show_session(self.app.d.open_session())
+
+
+class EndSessionView(tk.Frame):
+    """End Session: the log reading, notes, and the two prompts (§6.2).
+
+    Both prompts offer two legitimate answers — the tool does not decide for the
+    skipper whether the engine kept running or the session closed under way.
+    """
+
+    def __init__(self, parent, app, session):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session
+        d = app.d
+        self.engine_running = engine.timer_state(d).status is engine.TimerStatus.RUNNING
+        self.under_way = passage_next_kind(d, session["id"]) == "arrival"
+
+        tk.Label(self, text="End session", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
+        tk.Label(body, text="Log reading (end)", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).grid(row=0, column=0, sticky="e", pady=2)
+        self.log_end = _plain_entry(app, body, width=12)
+        self.log_end.grid(row=0, column=1, padx=theme.PAD, sticky="w")
+        tk.Label(body, text="Notes", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).grid(row=1, column=0, sticky="e", pady=2)
+        self.notes = _plain_entry(app, body, width=48)
+        self.notes.grid(row=1, column=1, padx=theme.PAD, sticky="w")
+
+        self.engine_choice = tk.StringVar(value="stop")
+        if self.engine_running:
+            box = _labelled_box(app, self, "The engine is logged as running")
+            box.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+            self._radios(app, box, self.engine_choice,
+                         (("stop", "Stop it now"), ("leave", "Leave it running")))
+
+        self.arrival_choice = tk.StringVar(value="log")
+        if self.under_way:
+            box = _labelled_box(app, self, "No arrival is logged — the session is under way")
+            box.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+            self._radios(app, box, self.arrival_choice,
+                         (("log", "Log an arrival now"), ("underway", "Close under way")))
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.BAD, font=app.font_small,
+                                wraplength=theme.DEFAULT_W - 60, justify="left", anchor="w")
+        self._banner.pack(fill="x", padx=theme.PAD)
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", self._cancel).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "End session", self._end).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+
+    @staticmethod
+    def _radios(app, parent, var, options):
+        for value, label in options:
+            tk.Radiobutton(parent, text=label, variable=var, value=value,
+                           bg=theme.BG, fg=theme.FG, selectcolor=theme.BG_PANEL,
+                           activebackground=theme.BG, activeforeground=theme.FG,
+                           font=app.font_base, highlightthickness=0,
+                           anchor="w").pack(anchor="w")
+
+    def _cancel(self):
+        self.app.show_session(self.session)
+
+    def _end(self):
+        d = self.app.d
+        now = datetime.now(timezone.utc)
+
+        if self.under_way and self.arrival_choice.get() == "log":
+            write_event(self.app, self.session, when=now, event_kind="arrival")
+
+        if self.engine_running and self.engine_choice.get() == "stop":
+            try:
+                result = engine.stop(d, now)
+            except engine.EngineError as exc:
+                self._banner.configure(text=str(exc))   # surfaced, not swallowed
+                return
+            write_event(self.app, self.session, when=now, event_kind="engine_off",
+                        engine_run_id=result.run_id)
+
+        self.app.persist_distance()                      # flush the total (§5.5)
+        d.set_autolog_active(self.session["id"], False)
+        d.close_session(self.session["id"], closed_utc=db.to_iso_utc(now),
+                        log_end_nm=_num(self.log_end.get()),
+                        notes=_opt_entry(self.notes))
+        # CSV export and backup are triggered from here once export.py and
+        # backup.py exist (§6.2; build steps 4-5).
+        self.app.show_launch()
+
+
+def session_edit_form(parent, app, session):
+    return SessionEditView(parent, app, session)
+
+
+def end_session_form(parent, app, session):
+    return EndSessionView(parent, app, session)
