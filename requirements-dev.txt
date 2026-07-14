@@ -1,5 +1,6 @@
-# Dev-only dependencies. The RUNTIME path has zero third-party dependencies and
-# must stay that way (stdlib + Tkinter only) — nothing here is imported by the
-# application. pytest drives the engine-arithmetic and distance-accumulator
-# tests (build order step 2).
+# Dev-only. The RUNTIME path has zero third-party dependencies and must stay
+# that way (stdlib + Tkinter only). The test suite itself uses the stdlib
+# `unittest` module, so it needs nothing installed:
+#     python -m unittest discover -s tests -t .
+# pytest is optional — if installed it runs the same tests with nicer output.
 pytest
