@@ -115,6 +115,30 @@ class FormTestCase(unittest.TestCase):
         self.assertEqual(parsed.strftime("%Y-%m-%dT%H:%M"), "2026-07-13T09:15")
         self.assertEqual(forms._parse_time_field("junk", timezone.utc, now=now), now)
 
+    def test_out_of_range_time_is_unreadable_not_a_crash(self):
+        # A fat-fingered hour must not take the save down with it.
+        now = datetime(2026, 7, 13, 15, 30, tzinfo=timezone.utc)
+        for typo in ("25:00", "12:99", "-1:00"):
+            with self.subTest(typo=typo):
+                self.assertEqual(forms._parse_time_field(typo, timezone.utc, now=now), now)
+
+    def test_time_before_midnight_back_dates_to_yesterday(self):
+        # 00:10 local, logging something that happened at 23:50 — twenty minutes
+        # ago, not twenty-three hours and forty minutes hence.
+        now = datetime(2026, 7, 14, 0, 10, tzinfo=timezone.utc)
+        when = forms._parse_time_field("23:50", timezone.utc, now=now)
+        self.assertEqual(when.strftime("%Y-%m-%dT%H:%M"), "2026-07-13T23:50")
+        self.assertLess(when, now)
+        self.assertAlmostEqual((now - when).total_seconds(), 20 * 60)
+
+    def test_a_midnight_crossing_run_is_not_negative(self):
+        # 01:30, adding the run that started at 23:00 and stopped at 01:00.
+        now = datetime(2026, 7, 14, 1, 30, tzinfo=timezone.utc)
+        started = forms._parse_time_field("23:00", timezone.utc, now=now)
+        stopped = forms._parse_time_field("01:00", timezone.utc, now=now)
+        self.assertLess(started, stopped)
+        self.assertEqual((stopped - started).total_seconds() / 60, 120.0)
+
     # -- Sail / Radio / Crew --------------------------------------------------
 
     def test_sail_form_writes_snapshot_json(self):

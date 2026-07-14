@@ -467,9 +467,14 @@ def event_position_fields(app, when: datetime) -> dict:
     A materially back-dated event gets NO position: the alternative is
     fabricating a location, which is not an option. The named place carries what
     matters instead (§6.4, §10.1).
+
+    The test is on the DISTANCE from now, not the direction. A time that lands
+    ahead of the clock is no better evidence of where the boat is than one behind
+    it, and treating "not back-dated" as "safe to attach the current fix" is what
+    would let a mistyped time collect a position the boat was never at.
     """
     now = datetime.now(timezone.utc)
-    if (now - when).total_seconds() > app.backdate_tolerance_sec:
+    if abs((now - when).total_seconds()) > app.backdate_tolerance_sec:
         return {"position_source": "none"}
     fix = app.gps_state.fix
     if app.gps_state.classify() in ("FIX", "2D") and fix and fix.has_position:
