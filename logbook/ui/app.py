@@ -5,11 +5,300 @@ only place TPV data crosses from the reader thread into widgets.
 
   - Single window; switch views in place. No second Toplevel, no draggable sash
     (invariant 8) — they add a whole class of bug for no benefit here.
-  - 800×480 design floor; touch targets >= 44 px; dark, high-contrast, large
-    fonts by default (Tk defaults are inadequate in sunlight or at night).
+  - Resizable window with an 800x480 minimum (the design floor); F11 toggles
+    fullscreen for the alt-tab-with-OpenCPN workflow. Touch targets >= 44 px;
+    dark, high-contrast, large fonts (Tk defaults are inadequate in sunlight).
   - The only state shown is the tool's own — auto-log running, engine running,
     GPS fix — each derived from the database, not from a variable.
 
 Build order: step 3.
 Spec: §6.1.
 """
+
+from __future__ import annotations
+
+import queue
+import tkinter as tk
+import tkinter.font as tkfont
+from datetime import datetime, timezone
+
+from logbook import engine, gps
+from logbook.ui import theme
+
+GPS_TICK_MS = 250
+
+
+class GpsState:
+    """Main-thread view of the GPS: the latest fix and whether we're connected.
+
+    Staleness is judged live on each read (via ``gps.classify``), so a fix that
+    stops updating ages into STALE even while no new data arrives.
+    """
+
+    def __init__(self, stale_sec: float = gps.DEFAULT_STALE_SEC) -> None:
+        self.fix: gps.Fix | None = None
+        self.connected = False
+        self._stale = stale_sec
+
+    def on_status(self, msg: str) -> None:
+        self.connected = (msg == "connected")
+
+    def on_fix(self, fix: gps.Fix) -> None:
+        self.connected = True
+        self.fix = fix
+
+    def classify(self, now: datetime | None = None) -> str:
+        if not self.connected:
+            return "OFFLINE"
+        if self.fix is None:
+            return "NO FIX"
+        return gps.classify(self.fix, now or datetime.now(timezone.utc), self._stale)
+
+    def indicator(self, now: datetime | None = None) -> tuple[str, str]:
+        state = self.classify(now)
+        if state == "OFFLINE":
+            return ("GPS offline", theme.BAD)
+        if state in ("FIX", "2D"):
+            return (f"GPS {state.lower()}", theme.OK)
+        return (f"GPS {state.lower()}", theme.WARN)  # NO FIX / STALE
+
+
+class ViewManager:
+    """Swaps full-window views inside one content frame (no Toplevel)."""
+
+    def __init__(self, content: tk.Frame) -> None:
+        self.content = content
+        self._current: tk.Widget | None = None
+
+    @property
+    def current(self) -> tk.Widget | None:
+        return self._current
+
+    def show(self, view: tk.Widget) -> tk.Widget:
+        if self._current is not None:
+            self._current.destroy()
+        self._current = view
+        view.pack(fill="both", expand=True)
+        return view
+
+
+class App:
+    def __init__(
+        self,
+        d,
+        *,
+        host: str = gps.DEFAULT_HOST,
+        port: int = gps.DEFAULT_PORT,
+        startup_warnings: list[str] | None = None,
+        start_reader: bool = True,
+    ) -> None:
+        self.d = d
+        self.startup_warnings = list(startup_warnings or [])
+        self.gps_queue: queue.Queue = queue.Queue()
+        self.gps_state = GpsState()
+        self.reader = gps.GpsdReader(self.gps_queue, host, port)
+
+        self.root = tk.Tk()
+        self._apply_theme()
+        self._init_window()
+        self._build_chrome()
+        self.views = ViewManager(self._content)
+        self.show_launch()
+
+        if start_reader:
+            self.reader.start()
+            self._schedule_pump()
+
+    # -- setup ----------------------------------------------------------------
+
+    def _apply_theme(self) -> None:
+        self.font_base = tkfont.nametofont("TkDefaultFont")
+        self.font_base.configure(size=theme.SIZE_BASE)
+        for name in ("TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            try:
+                tkfont.nametofont(name).configure(size=theme.SIZE_BASE)
+            except tk.TclError:
+                pass
+        family = self.font_base.cget("family")
+        self.font_small = tkfont.Font(family=family, size=theme.SIZE_SMALL)
+        self.font_large = tkfont.Font(family=family, size=theme.SIZE_LARGE)
+        self.root.configure(bg=theme.BG)
+
+    def _init_window(self) -> None:
+        self.root.title("SYLog")
+        self.root.geometry(f"{theme.DEFAULT_W}x{theme.DEFAULT_H}")
+        self.root.minsize(theme.MIN_W, theme.MIN_H)
+        self._fullscreen = False
+        self.root.bind("<F11>", self.toggle_fullscreen)
+        self.root.bind("<Escape>", self._exit_fullscreen)
+
+    def _build_chrome(self) -> None:
+        self._content = tk.Frame(self.root, bg=theme.BG)
+        self._content.pack(side="top", fill="both", expand=True)
+        bar = tk.Frame(self.root, bg=theme.BG_PANEL)
+        bar.pack(side="bottom", fill="x")
+        self._gps_label = tk.Label(bar, text="GPS offline", fg=theme.BAD,
+                                   bg=theme.BG_PANEL, font=self.font_small)
+        self._gps_label.pack(side="right", padx=theme.PAD, pady=2)
+        self._refresh_gps_indicator()
+
+    # -- fullscreen -----------------------------------------------------------
+
+    def toggle_fullscreen(self, event=None) -> None:
+        self._fullscreen = not self._fullscreen
+        self.root.attributes("-fullscreen", self._fullscreen)
+
+    def _exit_fullscreen(self, event=None) -> None:
+        if self._fullscreen:
+            self._fullscreen = False
+            self.root.attributes("-fullscreen", False)
+
+    # -- the GPS tick (thread boundary) ---------------------------------------
+
+    def _schedule_pump(self) -> None:
+        self.root.after(GPS_TICK_MS, self._pump_gps)
+
+    def _pump_gps(self) -> None:
+        self._drain_and_refresh()
+        self.root.after(GPS_TICK_MS, self._pump_gps)
+
+    def _drain_and_refresh(self) -> None:
+        """Drain the reader queue and refresh live widgets. Main thread only."""
+        try:
+            while True:
+                kind, payload = self.gps_queue.get_nowait()
+                if kind == "status":
+                    self.gps_state.on_status(payload)
+                elif kind == "tpv":
+                    self.gps_state.on_fix(payload)
+        except queue.Empty:
+            pass
+        self._refresh_gps_indicator()
+        current = self.views.current
+        if isinstance(current, LaunchView):
+            current.refresh()
+
+    def _refresh_gps_indicator(self) -> None:
+        text, color = self.gps_state.indicator()
+        self._gps_label.configure(text=text, fg=color)
+
+    # -- views ----------------------------------------------------------------
+
+    def show_launch(self, event=None) -> None:
+        self.views.show(LaunchView(self._content, self))
+
+    def show_placeholder(self, title: str) -> None:
+        self.views.show(PlaceholderView(self._content, self, title))
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+# -- views --------------------------------------------------------------------
+
+def _big_button(parent, text, command, *, width=0):
+    return tk.Button(
+        parent, text=text, command=command,
+        bg=theme.BG_BUTTON, fg=theme.FG,
+        activebackground=theme.ACCENT, activeforeground=theme.FG,
+        disabledforeground=theme.FG_MUTED,
+        bd=0, highlightthickness=0,
+        padx=theme.PAD * 2, pady=theme.PAD * 2, width=width,
+    )
+
+
+def _hm(minutes: float) -> str:
+    total = int(minutes)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _engine_hours_text(total_h: float, baseline_h: float, note: str) -> str:
+    """The provenance-carrying label from §7 — never a bare number."""
+    if note == "documented":
+        return f"Engine: {total_h:,.1f} h total (incl. {baseline_h:,.0f} h documented prior)"
+    if note == "estimated":
+        return f"Engine: {total_h:,.1f} h (estimated)"
+    return f"Engine: {total_h:.1f} h recorded"
+
+
+class LaunchView(tk.Frame):
+    def __init__(self, parent, app: App) -> None:
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self._build()
+        self.refresh()
+
+    def _build(self) -> None:
+        self._engine_hours = tk.Label(self, bg=theme.BG, fg=theme.FG, font=self.app.font_large)
+        self._engine_hours.pack(pady=(theme.PAD * 4, theme.PAD * 2))
+
+        row = tk.Frame(self, bg=theme.BG)
+        row.pack(pady=theme.PAD * 2)
+        self._start_btn = _big_button(row, "Start Session", self._start_session, width=12)
+        self._start_btn.pack(side="left", padx=theme.PAD)
+        self._log_btn = _big_button(row, "View Log", self._view_log, width=12)
+        self._log_btn.pack(side="left", padx=theme.PAD)
+        self._engine_btn = _big_button(row, "Engine ▶", self._toggle_engine, width=12)
+        self._engine_btn.pack(side="left", padx=theme.PAD)
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=self.app.font_small,
+                                wraplength=theme.DEFAULT_W - 40, justify="center")
+        self._banner.pack(pady=theme.PAD * 2)
+
+    def refresh(self) -> None:
+        d = self.app.d
+        baseline_h = float(d.get_meta("engine_hours_baseline", "0"))
+        note = d.get_meta("engine_hours_baseline_note", "none")
+        total_h = engine.cumulative_minutes(d, baseline_h * 60.0) / 60.0
+        self._engine_hours.configure(text=_engine_hours_text(total_h, baseline_h, note))
+
+        state = engine.timer_state(d)
+        if state.status is engine.TimerStatus.RUNNING:
+            elapsed = engine.elapsed_minutes(state.run, datetime.now(timezone.utc))
+            self._engine_btn.configure(text=f"Engine ■  {_hm(elapsed)}", state="normal")
+            self._banner.configure(
+                text=f"Engine logged as running since {state.run['started_utc']}", fg=theme.WARN)
+        elif state.status is engine.TimerStatus.ERROR:
+            self._engine_btn.configure(text="Engine  ??", state="disabled")
+            self._banner.configure(
+                text=f"{len(state.open_runs)} engine runs are open — resolve in the log viewer",
+                fg=theme.BAD)
+        else:
+            self._engine_btn.configure(text="Engine ▶", state="normal")
+            self._banner.configure(text="  ".join(self.app.startup_warnings), fg=theme.WARN)
+
+    # -- actions --
+
+    def _toggle_engine(self) -> None:
+        d = self.app.d
+        now = datetime.now(timezone.utc)
+        state = engine.timer_state(d)
+        try:
+            if state.status is engine.TimerStatus.RUNNING:
+                result = engine.stop(d, now)
+            elif state.status is engine.TimerStatus.STOPPED:
+                result = engine.start(d, now)
+            else:
+                return  # ERROR — button is disabled; nothing to do
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        self.refresh()
+        if result.warnings:
+            self._banner.configure(text="; ".join(result.warnings), fg=theme.WARN)
+
+    def _start_session(self) -> None:
+        self.app.show_placeholder("Session view — next sub-stage")
+
+    def _view_log(self) -> None:
+        self.app.show_placeholder("Log viewer — build step 5")
+
+
+class PlaceholderView(tk.Frame):
+    """A stand-in for views not yet built, with a way back to Launch."""
+
+    def __init__(self, parent, app: App, title: str) -> None:
+        super().__init__(parent, bg=theme.BG)
+        tk.Label(self, text=title, bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_large).pack(expand=True)
+        _big_button(self, "‹ Back", app.show_launch).pack(pady=theme.PAD * 2)
