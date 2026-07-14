@@ -1,28 +1,27 @@
 """One form engine, five presets (Observation, Sail, Radio, Crew, Multi…).
 
 Categories are not different *kinds* of entry — they are different subsets of
-field groups. One engine drives all of them.
+field groups. One engine drives all of them: every group carries the record
+type it contributes to, and Save groups the collected fields BY record type,
+writing one row for a single preset and one row per type for Multi… (§6.7).
 
-  - Time is always present, defaults to now, and is editable; every other field
-    is optional. An entry may be nothing but a timestamp and a position.
-  - ``[Back] [Next] [Save]`` on EVERY page — Save must be reachable from page one
-    (invariant 9). This keeps the common case fast and is easy to omit by
-    accident.
-  - No pre-fill; the last recorded values appear as greyed hint text above blank
-    fields (a pre-filled form saved unexamined produces junk that looks like
-    observation).
-  - ``Multi…`` writes one row per record type, sharing a ``group_id``, in one
-    transaction. The tick set is sticky — except Sail plan, which is never
-    sticky and never pre-ticked.
-  - Sail is a full snapshot, pre-filled from the last known state fetched by
-    query (not held in a variable).
+  - Time is always present, defaults to now, editable; every other field
+    optional. ``[Back] [Next] [Save]`` on every page — Save reachable from page
+    one (invariant 9).
+  - No pre-fill; last values appear as greyed hint text. Sail is the exception:
+    a full snapshot pre-filled from the last recorded state (fetched by query).
+  - Time and position go on every row, identical by construction. Multi… writes
+    all its rows in one transaction sharing a group_id.
+  - Multi… tick set is sticky in memory — except Sail, never sticky, never
+    pre-ticked: ticking it is the deliberate act that makes the snapshot honest.
 
-Build order: step 3 (this sub-stage: the engine + the Observation preset).
-Spec: §6.6, §6.7.
+Build order: step 3.
+Spec: §6.6, §6.7, §6.9.
 """
 
 from __future__ import annotations
 
+import json
 import tkinter as tk
 from datetime import datetime, timezone
 
@@ -34,6 +33,7 @@ _PRECIP_TYPES = ("", "none", "rain", "drizzle", "hail", "sleet", "snow")
 _INTENSITIES = ("", "light", "moderate", "heavy")
 _VISIBILITY = ("", "good", "moderate", "poor", "fog")
 _HEADING_REF = ("M", "T")
+_NOT_SET = "(not set)"
 
 
 def _num(text, cast=float):
@@ -70,12 +70,14 @@ def _parse_time_field(text, tz, *, now=None):
 # -- field groups -------------------------------------------------------------
 
 class _Group:
-    """A cluster of fields that builds widgets and collects {column: value}."""
+    """A cluster of fields; ``category`` is the record type it contributes to."""
 
     title = ""
+    category = "observation"
 
-    def __init__(self, app):
+    def __init__(self, app, session=None):
         self.app = app
+        self.session = session
 
     def _entry(self, parent, width=10):
         return tk.Entry(parent, width=width, bg=theme.BG_PANEL, fg=theme.FG,
@@ -107,6 +109,7 @@ class _Group:
 
 class PositionCourse(_Group):
     title = "Position & course"
+    category = "observation"
 
     def build(self, parent):
         box = self._box(parent)
@@ -117,7 +120,6 @@ class PositionCourse(_Group):
         self.lon = self._entry(box)
         self.lon.grid(row=0, column=3, padx=(2, theme.PAD))
 
-        # auto position capture — only from a usable, non-stale fix (§3.3)
         self._auto = None
         fix = self.app.gps_state.fix
         if self.app.gps_state.classify() in ("FIX", "2D") and fix and fix.has_position:
@@ -140,9 +142,9 @@ class PositionCourse(_Group):
         if lat is None or lon is None:
             source, fix_mode, lat, lon = "none", None, None, None
         elif self._auto and (round(lat, 5), round(lon, 5)) == self._auto[:2]:
-            source, fix_mode = "gps", self._auto[2]      # unchanged from the fix
+            source, fix_mode = "gps", self._auto[2]
         else:
-            source, fix_mode = "manual", None            # typed or edited
+            source, fix_mode = "manual", None
         hd = _num(self.heading.get())
         return {
             "latitude": lat, "longitude": lon,
@@ -154,6 +156,7 @@ class PositionCourse(_Group):
 
 class WindSea(_Group):
     title = "Wind & sea"
+    category = "observation"
 
     def build(self, parent):
         box = self._box(parent)
@@ -172,7 +175,6 @@ class WindSea(_Group):
         return box
 
     def collect(self) -> dict:
-        # Beaufort OR knots — stored as given, never one derived from the other.
         return {
             "wind_dir_deg": _num(self.dir.get()),
             "wind_speed_kn": _num(self.speed.get()),
@@ -183,6 +185,7 @@ class WindSea(_Group):
 
 class Weather(_Group):
     title = "Weather"
+    category = "observation"
 
     def build(self, parent):
         box = self._box(parent)
@@ -212,17 +215,84 @@ class Weather(_Group):
         }
 
 
+class SailPlan(_Group):
+    title = "Sail plan"
+    category = "sail"
+
+    def build(self, parent):
+        box = self._box(parent)
+        last = _last_sail_state(self.app, self.session["id"]) if self.session else {}
+        self.vars = {}
+        for i, sail in enumerate(self.app.sails or []):
+            self._label(box, sail["name"]).grid(row=i, column=0, sticky="e", pady=1)
+            options = (_NOT_SET, *sail["reefs"])
+            default = last.get(sail["id"], _NOT_SET)
+            var, menu = self._menu(box, options, default if default in options else _NOT_SET)
+            menu.grid(row=i, column=1, sticky="ew", padx=theme.PAD)
+            self.vars[sail["id"]] = var
+        return box
+
+    def collect(self) -> dict:
+        state = {sid: var.get() for sid, var in self.vars.items() if var.get() != _NOT_SET}
+        return {"sail_state": json.dumps(state)}   # {} means recorded as no sail set
+
+
+class RadioGroup(_Group):
+    title = "Radio"
+    category = "radio"
+
+    def build(self, parent):
+        box = self._box(parent)
+        self._label(box, "Channel").grid(row=0, column=0, sticky="e")
+        self.channel = self._entry(box, width=12)
+        self.channel.grid(row=0, column=1, padx=theme.PAD)
+        self._label(box, "Station").grid(row=1, column=0, sticky="e")
+        self.station = self._entry(box, width=18)
+        self.station.grid(row=1, column=1, padx=theme.PAD)
+        return box
+
+    def collect(self) -> dict:
+        return {"radio_channel": _opt_entry(self.channel), "radio_station": _opt_entry(self.station)}
+
+
+class RemarksGroup(_Group):
+    title = "Note"
+    category = "crew"
+
+    def build(self, parent):
+        box = self._box(parent)
+        self.remarks = self._entry(box, width=48)
+        self.remarks.grid(row=0, column=0, padx=theme.PAD, pady=theme.PAD)
+        return box
+
+    def collect(self) -> dict:
+        return {"remarks": _opt_entry(self.remarks)}
+
+
+def _opt_entry(entry):
+    value = entry.get().strip()
+    return value or None
+
+
+def _last_sail_state(app, session_id) -> dict:
+    for row in app.d.session_entries(session_id, newest_first=True):
+        if row["category"] == "sail" and row["sail_state"]:
+            try:
+                return json.loads(row["sail_state"])
+            except ValueError:
+                return {}
+    return {}
+
+
 # -- the form engine ----------------------------------------------------------
 
 class FormView(tk.Frame):
-    """Pages through field groups; Save writes one row from all of them."""
+    """Pages through field groups; Save writes one row per record type touched."""
 
-    def __init__(self, parent, app, session, *, title, category, pages,
-                 entry_type="manual", hint=None):
+    def __init__(self, parent, app, session, *, title, pages, entry_type="manual", hint=None):
         super().__init__(parent, bg=theme.BG)
         self.app = app
         self.session = session
-        self.category = category
         self.entry_type = entry_type
         self.pages = pages
         self._page = 0
@@ -288,23 +358,50 @@ class FormView(tk.Frame):
     def _cancel(self):
         self.app.show_session(self.session)
 
-    def collect_fields(self) -> dict:
+    def _auto_position(self) -> dict:
+        fix = self.app.gps_state.fix
+        if self.app.gps_state.classify() in ("FIX", "2D") and fix and fix.has_position:
+            return {"latitude": fix.lat, "longitude": fix.lon,
+                    "position_source": "gps", "fix_mode": fix.mode}
+        return {"position_source": "none"}
+
+    def collect_rows(self) -> list[dict]:
         now = datetime.now(timezone.utc)
         ts = _parse_time_field(self.time_entry.get(), self.app.tz, now=now)
-        fields = dict(
-            session_id=self.session["id"], timestamp_utc=db.to_iso_utc(ts),
-            time_source="system", recorded_utc=db.to_iso_utc(now),
-            entry_type=self.entry_type, category=self.category, position_source="none")
+        base = dict(session_id=self.session["id"], timestamp_utc=db.to_iso_utc(ts),
+                    time_source="system", recorded_utc=db.to_iso_utc(now))
+        by_cat: dict[str, dict] = {}
+        position = None
         for groups in self.pages:
             for group in groups:
-                for key, value in group.collect().items():
+                data = group.collect()
+                if isinstance(group, PositionCourse):
+                    position = {k: data.pop(k) for k in
+                                ("latitude", "longitude", "position_source", "fix_mode")}
+                row = by_cat.setdefault(group.category, {})
+                for key, value in data.items():
                     if value is not None:
-                        fields[key] = value
-        return fields
+                        row[key] = value
+        if position is None:
+            position = self._auto_position()
+        rows = []
+        for category, extra in by_cat.items():
+            row = dict(base, entry_type=self.entry_type, category=category,
+                       position_source="none")
+            for key, value in position.items():
+                if value is not None:
+                    row[key] = value
+            row.update(extra)
+            rows.append(row)
+        return rows
 
     def _save(self):
-        self.app.d.insert_entry(**self.collect_fields())
-        self.app.show_session(self.session)  # rebuilds SessionView -> log refreshes
+        rows = self.collect_rows()
+        if len(rows) == 1:
+            self.app.d.insert_entry(**rows[0])
+        else:
+            self.app.d.insert_group(rows)   # one transaction, shared group_id (§6.7)
+        self.app.show_session(self.session)
 
 
 # -- presets ------------------------------------------------------------------
@@ -316,8 +413,81 @@ def _last_observation_hint(app, session_id):
     return None
 
 
+def _groups_for(app, session, category):
+    if category == "observation":
+        return [PositionCourse(app, session), WindSea(app, session), Weather(app, session)]
+    if category == "sail":
+        return [SailPlan(app, session)]
+    if category == "radio":
+        return [RadioGroup(app, session)]
+    return [RemarksGroup(app, session)]
+
+
 def observation_form(parent, app, session):
-    """Observation = Position & course · Wind & sea · Weather → one row, 3 pages."""
-    pages = [[PositionCourse(app)], [WindSea(app)], [Weather(app)]]
-    return FormView(parent, app, session, title="Observation", category="observation",
-                    pages=pages, hint=_last_observation_hint(app, session["id"]))
+    pages = [[PositionCourse(app, session)], [WindSea(app, session)], [Weather(app, session)]]
+    return FormView(parent, app, session, title="Observation", pages=pages,
+                    hint=_last_observation_hint(app, session["id"]))
+
+
+def sail_form(parent, app, session):
+    return FormView(parent, app, session, title="Sail plan", pages=[[SailPlan(app, session)]])
+
+
+def radio_form(parent, app, session):
+    return FormView(parent, app, session, title="Radio", pages=[[RadioGroup(app, session)]])
+
+
+def crew_form(parent, app, session):
+    return FormView(parent, app, session, title="Crew note", pages=[[RemarksGroup(app, session)]])
+
+
+_MULTI_CATS = (
+    ("observation", "Observation (position · wind · weather)"),
+    ("sail", "Sail plan"),
+    ("radio", "Radio"),
+    ("crew", "Crew note"),
+)
+
+
+class MultiTickView(tk.Frame):
+    """Tick which record types to make, then fill the ticked ones (§6.6/6.7)."""
+
+    def __init__(self, parent, app, session):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session
+        self.vars = {}
+        sticky = getattr(app, "_multi_ticks", {})
+        tk.Label(self, text="Multi… — tick what to record", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+        for cat, label in _MULTI_CATS:
+            default = bool(sticky.get(cat)) and cat != "sail"   # Sail never pre-ticked
+            var = tk.BooleanVar(value=default)
+            self.vars[cat] = var
+            tk.Checkbutton(self, text=label, variable=var, bg=theme.BG, fg=theme.FG,
+                           selectcolor=theme.BG_PANEL, activebackground=theme.BG,
+                           activeforeground=theme.FG, font=app.font_base,
+                           highlightthickness=0, anchor="w").pack(
+                anchor="w", padx=theme.PAD * 3, pady=2)
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", self._cancel).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Next ›", self._next).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+
+    def _cancel(self):
+        self.app.show_session(self.session)
+
+    def _next(self):
+        ticks = {cat: var.get() for cat, var in self.vars.items()}
+        self.app._multi_ticks = ticks   # sticky (Sail forced off on next open)
+        cats = [cat for cat, _ in _MULTI_CATS if ticks[cat]]
+        if not cats:
+            self.app.show_session(self.session)
+            return
+        pages = [_groups_for(self.app, self.session, cat) for cat in cats]
+        self.app.views.show(
+            FormView(self.app._content, self.app, self.session, title="Multi…", pages=pages))
+
+
+def multi_form(parent, app, session):
+    return MultiTickView(parent, app, session)
