@@ -70,6 +70,15 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(fields, {"position_source": "none"})   # ...but is not used
         self.assertNotIn("latitude", fields)
 
+    def test_a_future_dated_event_gets_no_position_either(self):
+        # A time ahead of the clock is no better evidence of where the boat is
+        # than one behind it. It must not collect the live fix.
+        app = self._app()
+        app.gps_state.on_fix(a_fix())
+        when = datetime.now(UTC) + timedelta(hours=2)
+        fields = app_mod.event_position_fields(app, when)
+        self.assertEqual(fields, {"position_source": "none"})
+
     # -- Depart / Arrive -------------------------------------------------------
 
     def test_button_derives_depart_then_arrive(self):

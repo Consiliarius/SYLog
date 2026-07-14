@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from logbook import db, engine
 from logbook.ui import render, theme
@@ -99,8 +99,21 @@ def _text_value(widget):
     return value or None
 
 
+# A typed clock time means the NEAREST such time, looking back. Half a day is the
+# widest window in which "23:50" can only sensibly mean the one that has passed.
+_ROLLOVER_SEC = 12 * 3600
+
+
 def _parse_time_field(text, tz, *, now=None):
-    """Read the editable time field (local HH:MM) back to UTC; blank/invalid → now."""
+    """Read the editable time field (local HH:MM) back to UTC; blank/invalid → now.
+
+    The typed time is resolved to the nearest occurrence at or before ``now``,
+    not to today's date. On a night passage the two differ: at 00:10 local,
+    "23:50" means twenty minutes ago, not twenty-three hours and forty minutes
+    from now. Dating it forward would be worse than a wrong clock reading — a
+    future timestamp does not read as back-dated, so the event would be given the
+    live GPS position of a place the boat was never at (§6.4, §4.1).
+    """
     now = now or datetime.now(timezone.utc)
     text = text.strip()
     if not text:
@@ -108,9 +121,11 @@ def _parse_time_field(text, tz, *, now=None):
     try:
         parts = text.split(":")
         hh, mm = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        local = now.astimezone(tz).replace(hour=hh, minute=mm, second=0, microsecond=0)
     except (ValueError, IndexError):
-        return now
-    local = now.astimezone(tz).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return now      # unreadable, including an out-of-range '25:00' or '12:99'
+    if (local - now).total_seconds() > _ROLLOVER_SEC:
+        local -= timedelta(days=1)
     return local.astimezone(timezone.utc)
 
 
@@ -662,10 +677,10 @@ class DepartArriveForm(tk.Frame):
 
     def _check_backdate(self, _event=None):
         when = _parse_time_field(self.time_entry.get(), self.app.tz)
-        behind = (datetime.now(timezone.utc) - when).total_seconds()
+        offset = abs((datetime.now(timezone.utc) - when).total_seconds())
         self._backdate_note.configure(
             text=("Back-dated — no position will be recorded for this event."
-                  if behind > self.app.backdate_tolerance_sec else ""))
+                  if offset > self.app.backdate_tolerance_sec else ""))
 
     def _cancel(self):
         self.app.show_session(self.session)

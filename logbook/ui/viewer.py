@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
+from logbook import db
 from logbook.ui import render, theme
 from logbook.ui.app import _big_button
 
@@ -42,13 +43,22 @@ EDITABLE_FIELDS = (
     ("radio_channel", "Radio channel"), ("radio_station", "Radio station"),
     ("remarks", "Remarks"),
 )
+_LABELS = dict(EDITABLE_FIELDS)
 _FLOAT = {"latitude", "longitude", "cog_deg", "sog_kn", "heading_deg", "log_nm",
           "wind_dir_deg", "wind_speed_kn", "pressure_mb"}
 _INT = {"wind_force_bf", "sea_state", "cloud_oktas"}
 
 
 def _parse_field(column, text):
+    """Validating parse for one edited field. Raises ValueError on bad input."""
     text = text.strip()
+    if column == "timestamp_utc":
+        # The one field that is NOT NULL and that every reader parses. A blank or
+        # unreadable value written here would break the rolling log, this viewer
+        # and the session's CSV export — the archival record — for good, with no
+        # way back from inside the tool. So it is parsed and re-canonicalised,
+        # never stored as typed.
+        return db.to_iso_utc(db.parse_iso_utc(text))
     if not text:
         return None
     if column in _FLOAT:
@@ -232,11 +242,14 @@ class ViewerEntryEditView(tk.Frame):
     def _save(self):
         values = {}
         for column, widget in self.fields.items():
+            typed = widget.get().strip()
             try:
                 values[column] = _parse_field(column, widget.get())
             except ValueError:
-                self._banner.configure(text=f"'{widget.get()}' is not a valid {column}")
-                return
+                self._banner.configure(text=(
+                    f"{_LABELS[column]} is required — it cannot be blank" if not typed
+                    else f"{_LABELS[column]}: '{typed}' is not a valid value"))
+                return      # nothing is written until every field parses
         self.app.d.update_entry(self.entry["id"], **values)   # marks edited = 1
         self._back()
 

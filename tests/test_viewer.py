@@ -77,6 +77,38 @@ class ViewerTestCase(unittest.TestCase):
         self.assertEqual(row["edited"], 1)               # visibly marked
         self.assertIsNotNone(row["edited_utc"])
 
+    def test_an_unreadable_timestamp_is_refused(self):
+        # timestamp_utc is NOT NULL and every reader parses it: storing what was
+        # typed would break the log, the viewer and the CSV export for this
+        # session, with no way back from inside the tool.
+        entry_id = self._entry(remarks="keep me")
+        original = self.d.entry(entry_id)["timestamp_utc"]
+
+        for typed in ("", "yesterday 3pm"):
+            with self.subTest(typed=typed):
+                view = ViewerEntryEditView(self.app._content, self.app, self.session,
+                                           self.d.entry(entry_id))
+                view.fields["timestamp_utc"].delete(0, "end")
+                view.fields["timestamp_utc"].insert(0, typed)
+                view._save()
+
+                row = self.d.entry(entry_id)
+                self.assertEqual(row["timestamp_utc"], original)   # nothing written
+                self.assertEqual(row["edited"], 0)                 # not even marked
+                self.assertIn("Timestamp", view._banner.cget("text"))
+
+    def test_a_corrected_timestamp_is_stored_canonically(self):
+        entry_id = self._entry()
+        view = ViewerEntryEditView(self.app._content, self.app, self.session,
+                                   self.d.entry(entry_id))
+        view.fields["timestamp_utc"].delete(0, "end")
+        view.fields["timestamp_utc"].insert(0, "2026-07-13T16:45:00+01:00")
+        view._save()
+
+        row = self.d.entry(entry_id)
+        self.assertEqual(row["timestamp_utc"], "2026-07-13T15:45:00Z")   # UTC, trailing Z
+        self.assertEqual(row["edited"], 1)
+
     def test_delete_requires_a_reason(self):
         entry_id = self._entry()
         view = ViewerEntryEditView(self.app._content, self.app, self.session,
