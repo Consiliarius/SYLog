@@ -24,10 +24,27 @@ Spec: §5 (data model), §9 (migration).
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
+
+# Entry columns writable at insert time (id/edited/deleted are managed elsewhere).
+_ENTRY_COLUMNS = (
+    "session_id", "group_id",
+    "timestamp_utc", "time_source", "recorded_utc",
+    "entry_type", "category", "event_kind", "position_source", "fix_mode",
+    "latitude", "longitude", "cog_deg", "sog_kn",
+    "heading_deg", "heading_ref", "log_nm", "sail_state",
+    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
+    "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
+    "location_name", "engine_run_id", "radio_channel", "radio_station", "remarks",
+)
+_ENTRY_REQUIRED = (
+    "session_id", "timestamp_utc", "time_source", "recorded_utc",
+    "entry_type", "category", "position_source",
+)
 
 # CREATE statements only. PRAGMAs are per-connection and set in connect().
 _SCHEMA = """
@@ -273,3 +290,72 @@ class Database:
             "WHERE deleted = 0 AND started_utc IS NOT NULL AND stopped_utc IS NOT NULL "
             "ORDER BY started_utc"
         ).fetchall()
+
+    # -- sessions -------------------------------------------------------------
+
+    def create_session(self, *, opened_utc, departed_from=None, bound_for=None,
+                        skipper=None, crew=None, variation_deg=None,
+                        log_start_nm=None) -> int:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO session(opened_utc, departed_from, bound_for, skipper, "
+                "crew, variation_deg, log_start_nm) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (opened_utc, departed_from, bound_for, skipper, crew, variation_deg,
+                 log_start_nm))
+        return cur.lastrowid
+
+    def open_session(self) -> sqlite3.Row | None:
+        """The one un-closed session, if any (there should be at most one)."""
+        return self.conn.execute(
+            "SELECT * FROM session WHERE closed = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    def close_session(self, session_id, *, closed_utc, log_end_nm=None,
+                      notes=None) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE session SET closed = 1, closed_utc = ?, "
+                "log_end_nm = COALESCE(?, log_end_nm), notes = COALESCE(?, notes) "
+                "WHERE id = ?",
+                (closed_utc, log_end_nm, notes, session_id))
+
+    def session_entries(self, session_id, *, newest_first=True,
+                        limit=None) -> list[sqlite3.Row]:
+        """Non-deleted entries for a session, ordered by id (§3.4 — not by
+        timestamp). Newest-first for the rolling log; oldest-first for the viewer."""
+        order = "DESC" if newest_first else "ASC"
+        sql = (f"SELECT * FROM entry WHERE session_id = ? AND deleted = 0 "
+               f"ORDER BY id {order}")
+        params: list = [session_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return self.conn.execute(sql, params).fetchall()
+
+    # -- entries --------------------------------------------------------------
+
+    def insert_entry(self, **fields) -> int:
+        """Write one entry row in its own transaction; returns the new id."""
+        with self.conn:
+            return self._exec_insert_entry(self.conn, fields)
+
+    def insert_group(self, rows) -> tuple[str, list[int]]:
+        """Write several entry rows in ONE transaction, sharing a group_id (§6.7)."""
+        group_id = uuid.uuid4().hex
+        ids: list[int] = []
+        with self.conn:
+            for row in rows:
+                ids.append(self._exec_insert_entry(self.conn, {**row, "group_id": group_id}))
+        return group_id, ids
+
+    def _exec_insert_entry(self, conn, fields) -> int:
+        unknown = set(fields) - set(_ENTRY_COLUMNS)
+        if unknown:
+            raise ValueError(f"unknown entry columns: {sorted(unknown)}")
+        for req in _ENTRY_REQUIRED:
+            if fields.get(req) is None:
+                raise ValueError(f"entry requires '{req}'")
+        cols = list(fields)
+        sql = (f"INSERT INTO entry({', '.join(cols)}) "
+               f"VALUES ({', '.join(['?'] * len(cols))})")
+        return conn.execute(sql, [fields[c] for c in cols]).lastrowid

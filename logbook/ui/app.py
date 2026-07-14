@@ -22,8 +22,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime, timezone
 
-from logbook import engine, gps
-from logbook.ui import theme
+from logbook import db, engine, gps
+from logbook.ui import render, theme
 
 GPS_TICK_MS = 250
 
@@ -90,9 +90,12 @@ class App:
         host: str = gps.DEFAULT_HOST,
         port: int = gps.DEFAULT_PORT,
         startup_warnings: list[str] | None = None,
+        sails: list[dict] | None = None,
         start_reader: bool = True,
     ) -> None:
         self.d = d
+        self.sails = sails
+        self.tz = datetime.now(timezone.utc).astimezone().tzinfo  # system local, for display
         self.startup_warnings = list(startup_warnings or [])
         self.gps_queue: queue.Queue = queue.Queue()
         self.gps_state = GpsState()
@@ -190,6 +193,9 @@ class App:
     def show_placeholder(self, title: str) -> None:
         self.views.show(PlaceholderView(self._content, self, title))
 
+    def show_session(self, session_row) -> None:
+        self.views.show(SessionView(self._content, self, session_row))
+
     def run(self) -> None:
         self.root.mainloop()
 
@@ -251,6 +257,8 @@ class LaunchView(tk.Frame):
         note = d.get_meta("engine_hours_baseline_note", "none")
         total_h = engine.cumulative_minutes(d, baseline_h * 60.0) / 60.0
         self._engine_hours.configure(text=_engine_hours_text(total_h, baseline_h, note))
+        self._start_btn.configure(
+            text="Resume Session" if d.open_session() is not None else "Start Session")
 
         state = engine.timer_state(d)
         if state.status is engine.TimerStatus.RUNNING:
@@ -288,7 +296,12 @@ class LaunchView(tk.Frame):
             self._banner.configure(text="; ".join(result.warnings), fg=theme.WARN)
 
     def _start_session(self) -> None:
-        self.app.show_placeholder("Session view — next sub-stage")
+        d = self.app.d
+        session = d.open_session()
+        if session is None:  # Skip-style immediate open (rich start dialog is later)
+            d.create_session(opened_utc=db.to_iso_utc(datetime.now(timezone.utc)))
+            session = d.open_session()
+        self.app.show_session(session)
 
     def _view_log(self) -> None:
         self.app.show_placeholder("Log viewer — build step 5")
@@ -302,3 +315,45 @@ class PlaceholderView(tk.Frame):
         tk.Label(self, text=title, bg=theme.BG, fg=theme.FG_MUTED,
                  font=app.font_large).pack(expand=True)
         _big_button(self, "‹ Back", app.show_launch).pack(pady=theme.PAD * 2)
+
+
+class SessionView(tk.Frame):
+    """A live session: a toolbar plus the dense, newest-at-top rolling log."""
+
+    def __init__(self, parent, app: App, session_row) -> None:
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session_row
+        self._build()
+        self.refresh_log()
+
+    def _build(self) -> None:
+        bar = tk.Frame(self, bg=theme.BG_PANEL)
+        bar.pack(side="top", fill="x")
+        _big_button(bar, "End Session", self._end_session).pack(
+            side="left", padx=theme.PAD, pady=theme.PAD)
+        tk.Label(bar, text="entry forms — next sub-stage", bg=theme.BG_PANEL,
+                 fg=theme.FG_MUTED, font=self.app.font_small).pack(side="left", padx=theme.PAD)
+
+        # Display-only, dense, newest at top. Rebuilding from the top means there
+        # is no auto-scroll to fight a reader who has scrolled up (§6.1).
+        self._log = tk.Text(self, bg=theme.BG_PANEL, fg=theme.FG, font=self.app.font_small,
+                            wrap="none", bd=0, highlightthickness=0,
+                            padx=theme.PAD, pady=theme.PAD, spacing1=2, spacing3=2)
+        self._log.pack(side="top", fill="both", expand=True)
+        self._log.configure(state="disabled")
+
+    def refresh_log(self) -> None:
+        rows = self.app.d.session_entries(self.session["id"], newest_first=True, limit=200)
+        self._log.configure(state="normal")
+        self._log.delete("1.0", "end")
+        if not rows:
+            self._log.insert("end", "(no entries yet)")
+        for row in rows:
+            self._log.insert("end", render.one_line(row, tz=self.app.tz, sails=self.app.sails) + "\n")
+        self._log.configure(state="disabled")
+
+    def _end_session(self) -> None:
+        self.app.d.close_session(
+            self.session["id"], closed_utc=db.to_iso_utc(datetime.now(timezone.utc)))
+        self.app.show_launch()

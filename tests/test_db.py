@@ -92,6 +92,70 @@ class DbTestCase(unittest.TestCase):
                     "VALUES (999, '2026-07-13T10:00:00Z', 'gps', "
                     "'2026-07-13T10:00:00Z', 'manual', 'observation', 'none')")
 
+    # -- session and entry helpers --------------------------------------------
+
+    def _entry_fields(self, session_id, **extra):
+        base = dict(
+            session_id=session_id, timestamp_utc="2026-07-13T15:00:00Z",
+            time_source="gps", recorded_utc="2026-07-13T15:00:05Z",
+            entry_type="manual", category="observation", position_source="gps")
+        base.update(extra)
+        return base
+
+    def test_open_and_close_session(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z", skipper="A. Skipper")
+        self.assertEqual(d.open_session()["id"], sid)
+        d.close_session(sid, closed_utc="2026-07-13T18:00:00Z")
+        self.assertIsNone(d.open_session())
+
+    def test_insert_entry_and_fetch(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        rid = d.insert_entry(**self._entry_fields(sid, latitude=50.0, longitude=0.0))
+        rows = d.session_entries(sid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], rid)
+
+    def test_insert_entry_rejects_unknown_column(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        with self.assertRaises(ValueError):
+            d.insert_entry(**self._entry_fields(sid, bogus=1))
+
+    def test_insert_entry_requires_core_fields(self):
+        d = self.open()
+        fields = self._entry_fields(1)
+        del fields["session_id"]                      # a required NOT NULL field
+        with self.assertRaises(ValueError):
+            d.insert_entry(**fields)
+
+    def test_insert_group_shares_one_group_id_in_one_transaction(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        obs = self._entry_fields(sid, category="observation")
+        sail = self._entry_fields(sid, category="sail", sail_state="{}")
+        group_id, ids = d.insert_group([obs, sail])
+        self.assertEqual(len(ids), 2)
+        rows = d.session_entries(sid)
+        self.assertTrue(all(r["group_id"] == group_id for r in rows))
+
+    def test_session_entries_ordering(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        first = d.insert_entry(**self._entry_fields(sid))
+        second = d.insert_entry(**self._entry_fields(sid))
+        self.assertEqual(d.session_entries(sid, newest_first=True)[0]["id"], second)
+        self.assertEqual(d.session_entries(sid, newest_first=False)[0]["id"], first)
+
+    def test_session_entries_excludes_deleted(self):
+        d = self.open()
+        sid = d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        rid = d.insert_entry(**self._entry_fields(sid))
+        with d.conn:
+            d.conn.execute("UPDATE entry SET deleted = 1 WHERE id = ?", (rid,))
+        self.assertEqual(d.session_entries(sid), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,6 +133,31 @@ class AppShellTestCase(unittest.TestCase):
         launch.refresh()
         self.assertEqual(str(launch._engine_btn.cget("state")), "disabled")
 
+    def test_start_session_shows_session_view_and_renders_entries(self):
+        from logbook.ui.app import SessionView
+        self.app.views.current._start_session()
+        self.assertIsInstance(self.app.views.current, SessionView)
+        session = self.app.d.open_session()
+        self.assertIsNotNone(session)
+        self.app.d.insert_entry(
+            session_id=session["id"], timestamp_utc="2026-07-13T15:00:00Z",
+            time_source="gps", recorded_utc="2026-07-13T15:00:05Z",
+            entry_type="event", category="event", event_kind="departure",
+            position_source="none", location_name="Rye Harbour")
+        sv = self.app.views.current
+        sv.refresh_log()
+        text = sv._log.get("1.0", "end")
+        self.assertIn("DEPART", text)
+        self.assertIn("Rye Harbour", text)
+
+    def test_end_session_returns_to_launch(self):
+        from logbook.ui.app import LaunchView, SessionView
+        self.app.views.current._start_session()
+        self.assertIsInstance(self.app.views.current, SessionView)
+        self.app.views.current._end_session()
+        self.assertIsInstance(self.app.views.current, LaunchView)
+        self.assertIsNone(self.app.d.open_session())
+
 
 if __name__ == "__main__":
     unittest.main()

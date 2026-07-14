@@ -62,14 +62,15 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.check:
         app = App(d, host=args.host, port=args.port,
-                  startup_warnings=warnings, start_reader=False)
+                  startup_warnings=warnings, sails=cfg.sails, start_reader=False)
         app.root.withdraw()
         app.root.update()
         app.root.destroy()
         print("ok: logbook built and torn down cleanly")
         return
 
-    App(d, host=args.host, port=args.port, startup_warnings=warnings).run()
+    App(d, host=args.host, port=args.port, startup_warnings=warnings,
+        sails=cfg.sails).run()
 
 
 if __name__ == "__main__":
