@@ -121,6 +121,35 @@ class AppShellTestCase(unittest.TestCase):
         launch.refresh()
         self.assertIn("documented", launch._engine_hours.cget("text"))
 
+    # -- clock offset (§3.4) ---------------------------------------------------
+
+    def _put_fix(self, when):
+        self.app.gps_queue.put(("tpv", gps.Fix(time=when, mode=3, lat=50.0, lon=0.0,
+                                               sog_kn=5.0, cog_deg=90.0)))
+        self.app._drain_and_refresh()
+
+    def test_clock_offset_warns_once_on_advancing_fixes(self):
+        skewed = datetime.now(UTC) + timedelta(minutes=10)   # system clock is 10 min slow
+        self._put_fix(skewed)
+        self.assertIsNone(self.app.clock_warning)            # one fix proves nothing
+        self._put_fix(skewed + timedelta(seconds=1))         # advancing -> now it is evidence
+        self.assertIsNotNone(self.app.clock_warning)
+        self.assertIn("clock", self.app._clock_label.cget("text"))
+        self.assertIn("NOT auto-corrected", self.app.clock_warning)
+
+    def test_latched_receiver_is_staleness_not_a_clock_fault(self):
+        frozen = datetime.now(UTC) - timedelta(minutes=10)
+        for _ in range(3):
+            self._put_fix(frozen)                            # the same fix, resent forever
+        self.assertIsNone(self.app.clock_warning)            # not blamed on the clock...
+        self.assertEqual(self.app._gps_label.cget("fg"), theme.WARN)   # ...flagged stale
+
+    def test_no_clock_warning_when_the_clock_agrees(self):
+        now = datetime.now(UTC)
+        self._put_fix(now)
+        self._put_fix(now + timedelta(seconds=1))
+        self.assertIsNone(self.app.clock_warning)
+
     def test_two_open_runs_disable_engine_button(self):
         with self.d.conn:
             self.d.conn.execute(

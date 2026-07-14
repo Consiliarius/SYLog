@@ -98,6 +98,7 @@ class App:
         distance_sample_sec: float = 30.0,
         distance_persist_min: float = 5.0,
         speed_gate_kn: float = 0.5,
+        clock_offset_warn_sec: float = 60.0,
         db_path=None,
         backup_dir=None,
         backup_retention: int = 10,
@@ -113,6 +114,9 @@ class App:
         self.distance_sample_sec = distance_sample_sec
         self.distance_persist_min = distance_persist_min
         self.speed_gate_kn = speed_gate_kn
+        self.clock_offset_warn_sec = clock_offset_warn_sec
+        self.clock_warning: str | None = None
+        self._last_fix_time = None
 
         # Distance is accumulated in memory; only the total is persisted (§5.5).
         self.accumulator: DistanceAccumulator | None = None
@@ -170,6 +174,9 @@ class App:
         self._gps_label = tk.Label(bar, text="GPS offline", fg=theme.BAD,
                                    bg=theme.BG_PANEL, font=self.font_small)
         self._gps_label.pack(side="right", padx=theme.PAD, pady=2)
+        self._clock_label = tk.Label(bar, text="", fg=theme.BAD,
+                                     bg=theme.BG_PANEL, font=self.font_small)
+        self._clock_label.pack(side="right", padx=theme.PAD, pady=2)
         self._refresh_gps_indicator()
 
     # -- fullscreen -----------------------------------------------------------
@@ -201,6 +208,7 @@ class App:
                     self.gps_state.on_status(payload)
                 elif kind == "tpv":
                     self.gps_state.on_fix(payload)
+                    self._check_clock(payload)
         except queue.Empty:
             pass
         self._refresh_gps_indicator()
@@ -213,6 +221,34 @@ class App:
     def _refresh_gps_indicator(self) -> None:
         text, color = self.gps_state.indicator()
         self._gps_label.configure(text=text, fg=color)
+
+    def _check_clock(self, fix) -> None:
+        """Warn ONCE if the system clock disagrees with GPS time (§3.4).
+
+        The tool never silently corrects a stored timestamp — it tells the
+        skipper and leaves the data as observed. The clock is the system's job
+        (chrony + the gpsd SHM refclock), not the application's.
+
+        Only an ADVANCING fix time is evidence about the clock. A receiver that
+        has latched resends the same timestamp forever, which would otherwise
+        look exactly like a clock drifting away — that is staleness, and the GPS
+        indicator already says so.
+        """
+        if self.clock_warning is not None or fix.time is None:
+            return
+        advancing = self._last_fix_time is not None and fix.time > self._last_fix_time
+        self._last_fix_time = fix.time
+        if not advancing:
+            return
+        offset = (fix.time - datetime.now(timezone.utc)).total_seconds()
+        if abs(offset) <= self.clock_offset_warn_sec:
+            return
+        self.clock_warning = (
+            f"System clock differs from GPS by {offset:+.0f} s. Timestamps are recorded "
+            f"as observed and are NOT auto-corrected — discipline the clock "
+            f"(chrony + gpsd SHM refclock).")
+        self._clock_label.configure(text=f"clock {offset:+.0f}s")
+        self.startup_warnings = [*self.startup_warnings, self.clock_warning]
 
     # -- views ----------------------------------------------------------------
 

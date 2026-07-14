@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> None:
         distance_sample_sec=cfg.distance_sample_sec,
         distance_persist_min=cfg.distance_persist_min,
         speed_gate_kn=cfg.speed_gate_kn,
+        clock_offset_warn_sec=cfg.clock_offset_warn_sec,
         db_path=db_path,
         backup_dir=cfg.backup_dir,
         backup_retention=cfg.backup_retention,
