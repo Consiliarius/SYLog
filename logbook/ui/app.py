@@ -91,10 +91,12 @@ class App:
         port: int = gps.DEFAULT_PORT,
         startup_warnings: list[str] | None = None,
         sails: list[dict] | None = None,
+        backdate_tolerance_sec: float = 60.0,
         start_reader: bool = True,
     ) -> None:
         self.d = d
         self.sails = sails
+        self.backdate_tolerance_sec = backdate_tolerance_sec
         self.tz = datetime.now(timezone.utc).astimezone().tzinfo  # system local, for display
         self.startup_warnings = list(startup_warnings or [])
         self.gps_queue: queue.Queue = queue.Queue()
@@ -106,7 +108,12 @@ class App:
         self._init_window()
         self._build_chrome()
         self.views = ViewManager(self._content)
-        self.show_launch()
+        # A run left open across a restart accrues hours it may never have run —
+        # the more dangerous failure. Surface it; never accept it silently (§6.5).
+        if engine.timer_state(d).status is engine.TimerStatus.RUNNING:
+            self.show_engine_prompt()
+        else:
+            self.show_launch()
 
         if start_reader:
             self.reader.start()
@@ -180,6 +187,8 @@ class App:
         current = self.views.current
         if isinstance(current, LaunchView):
             current.refresh()
+        elif isinstance(current, SessionView):
+            current.refresh_controls()
 
     def _refresh_gps_indicator(self) -> None:
         text, color = self.gps_state.indicator()
@@ -202,6 +211,9 @@ class App:
     def show_form(self, factory: str, session_row) -> None:
         from logbook.ui import forms  # lazy: forms imports back into this module
         self.views.show(getattr(forms, factory)(self._content, self, session_row))
+
+    def show_engine_prompt(self) -> None:
+        self.views.show(EnginePromptView(self._content, self))
 
     def run(self) -> None:
         self.root.mainloop()
@@ -232,6 +244,45 @@ def _engine_hours_text(total_h: float, baseline_h: float, note: str) -> str:
     if note == "estimated":
         return f"Engine: {total_h:,.1f} h (estimated)"
     return f"Engine: {total_h:.1f} h recorded"
+
+
+# -- events -------------------------------------------------------------------
+
+def passage_next_kind(d, session_id: int) -> str:
+    """'departure' or 'arrival' — derived from the last passage event (§6.4)."""
+    row = d.last_passage_event(session_id)
+    if row is None or row["event_kind"] == "arrival":
+        return "departure"
+    return "arrival"
+
+
+def event_position_fields(app, when: datetime) -> dict:
+    """Auto position/COG/SOG for an event — suppressed if materially back-dated.
+
+    A materially back-dated event gets NO position: the alternative is
+    fabricating a location, which is not an option. The named place carries what
+    matters instead (§6.4, §10.1).
+    """
+    now = datetime.now(timezone.utc)
+    if (now - when).total_seconds() > app.backdate_tolerance_sec:
+        return {"position_source": "none"}
+    fix = app.gps_state.fix
+    if app.gps_state.classify() in ("FIX", "2D") and fix and fix.has_position:
+        return {"latitude": fix.lat, "longitude": fix.lon, "position_source": "gps",
+                "fix_mode": fix.mode, "cog_deg": fix.cog_deg, "sog_kn": fix.sog_kn}
+    return {"position_source": "none"}
+
+
+def write_event(app, session, *, when: datetime, event_kind: str, **extra) -> int:
+    """Write one timeline event row (category 'event') with auto position."""
+    now = datetime.now(timezone.utc)
+    fields = dict(
+        session_id=session["id"], timestamp_utc=db.to_iso_utc(when),
+        time_source="system", recorded_utc=db.to_iso_utc(now),
+        entry_type="event", category="event", event_kind=event_kind)
+    fields.update(event_position_fields(app, when))
+    fields.update({k: v for k, v in extra.items() if v is not None})
+    return app.d.insert_entry(**fields)
 
 
 class LaunchView(tk.Frame):
@@ -332,19 +383,33 @@ class SessionView(tk.Frame):
         self.app = app
         self.session = session_row
         self._build()
+        self.refresh_controls()
         self.refresh_log()
 
     def _build(self) -> None:
-        bar = tk.Frame(self, bg=theme.BG_PANEL)
-        bar.pack(side="top", fill="x")
-        _big_button(bar, "End Session", self._end_session).pack(
-            side="left", padx=theme.PAD, pady=theme.PAD)
+        # Row 1: two-state controls, state derived from the database (invariant 3).
+        bar1 = tk.Frame(self, bg=theme.BG_PANEL)
+        bar1.pack(side="top", fill="x")
+        self._passage_btn = _big_button(bar1, "Depart", self._passage, width=10)
+        self._passage_btn.pack(side="left", padx=theme.PAD, pady=theme.PAD)
+        self._engine_btn = _big_button(bar1, "Engine ▶", self._toggle_engine, width=12)
+        self._engine_btn.pack(side="left", padx=2, pady=theme.PAD)
+        _big_button(bar1, "End Session", self._end_session).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+
+        # Row 2: entry presets, plus retrospective Engine…
+        bar2 = tk.Frame(self, bg=theme.BG_PANEL)
+        bar2.pack(side="top", fill="x")
         for label, factory in (("Observation", "observation_form"), ("Sail", "sail_form"),
-                               ("Radio", "radio_form"), ("Crew", "crew_form"),
-                               ("Multi…", "multi_form")):
-            _big_button(bar, label,
+                               ("Engine…", "engine_form"), ("Radio", "radio_form"),
+                               ("Crew", "crew_form"), ("Multi…", "multi_form")):
+            _big_button(bar2, label,
                         lambda f=factory: self.app.show_form(f, self.session)).pack(
-                side="left", padx=2, pady=theme.PAD)
+                side="left", padx=2, pady=(0, theme.PAD))
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=self.app.font_small,
+                                wraplength=theme.DEFAULT_W - 40, justify="left", anchor="w")
+        self._banner.pack(fill="x", padx=theme.PAD)
 
         # Display-only, dense, newest at top. Rebuilding from the top means there
         # is no auto-scroll to fight a reader who has scrolled up (§6.1).
@@ -364,6 +429,50 @@ class SessionView(tk.Frame):
             self._log.insert("end", render.one_line(row, tz=self.app.tz, sails=self.app.sails) + "\n")
         self._log.configure(state="disabled")
 
+    def refresh_controls(self) -> None:
+        """Both two-state buttons re-derive from the database, never a variable."""
+        d = self.app.d
+        kind = passage_next_kind(d, self.session["id"])
+        self._passage_btn.configure(text="Depart" if kind == "departure" else "Arrive")
+
+        state = engine.timer_state(d)
+        if state.status is engine.TimerStatus.RUNNING:
+            elapsed = engine.elapsed_minutes(state.run, datetime.now(timezone.utc))
+            self._engine_btn.configure(text=f"Engine ■  {_hm(elapsed)}", state="normal")
+        elif state.status is engine.TimerStatus.ERROR:
+            self._engine_btn.configure(text="Engine  ??", state="disabled")
+        else:
+            self._engine_btn.configure(text="Engine ▶", state="normal")
+
+    # -- actions --
+
+    def _passage(self) -> None:
+        self.app.show_form("depart_arrive_form", self.session)
+
+    def _toggle_engine(self) -> None:
+        """Live button: press = instant write. No form, no time selector (§6.5)."""
+        d = self.app.d
+        now = datetime.now(timezone.utc)
+        state = engine.timer_state(d)
+        try:
+            if state.status is engine.TimerStatus.RUNNING:
+                result = engine.stop(d, now)
+                write_event(self.app, self.session, when=now, event_kind="engine_off",
+                            engine_run_id=result.run_id)
+            elif state.status is engine.TimerStatus.STOPPED:
+                result = engine.start(d, now, session_id=self.session["id"])
+                write_event(self.app, self.session, when=now, event_kind="engine_on",
+                            engine_run_id=result.run_id)
+            else:
+                return  # ERROR — button disabled
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        self._banner.configure(
+            text="; ".join(result.warnings) if result.warnings else "", fg=theme.WARN)
+        self.refresh_controls()
+        self.refresh_log()
+
     def _end_session(self) -> None:
         self.app.d.close_session(
             self.session["id"], closed_utc=db.to_iso_utc(datetime.now(timezone.utc)))
@@ -371,3 +480,54 @@ class SessionView(tk.Frame):
 
     def _observation(self) -> None:
         self.app.show_observation_form(self.session)
+
+
+class EnginePromptView(tk.Frame):
+    """An engine run left open across a restart, surfaced at startup (§6.5).
+
+    There is no dismiss. The elapsed time must be explicitly accepted ("still
+    running") or corrected ("stopped at ..."). A run left open accrues hours it
+    never ran — the more dangerous of the two failure modes (§10.2).
+    """
+
+    def __init__(self, parent, app: App) -> None:
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.run = engine.timer_state(app.d).run
+        now = datetime.now(timezone.utc)
+        started_local = db.parse_iso_utc(self.run["started_utc"]).astimezone(app.tz)
+        elapsed = engine.elapsed_minutes(self.run, now)
+
+        tk.Label(self, text="Is the engine still running?", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(pady=(theme.PAD * 5, theme.PAD))
+        tk.Label(self, text=(f"Logged as running since {started_local:%H:%M on %d %b %Y} "
+                             f"— {_hm(elapsed)} ago."),
+                 bg=theme.BG, fg=theme.WARN, font=app.font_base).pack(pady=theme.PAD)
+        tk.Label(self, text="Choose one. The elapsed time is not accepted silently.",
+                 bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack()
+
+        row = tk.Frame(self, bg=theme.BG)
+        row.pack(pady=theme.PAD * 3)
+        _big_button(row, "Still running", self._still_running).pack(side="left", padx=theme.PAD)
+        _big_button(row, "Stopped at", self._stopped_at).pack(side="left", padx=(theme.PAD * 3, 2))
+        self.time_entry = tk.Entry(row, width=6, bg=theme.BG_PANEL, fg=theme.FG,
+                                   insertbackground=theme.FG, bd=0, highlightthickness=1,
+                                   highlightbackground=theme.BG_BUTTON, font=app.font_base)
+        self.time_entry.insert(0, now.astimezone(app.tz).strftime("%H:%M"))
+        self.time_entry.pack(side="left")
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.BAD, font=app.font_small)
+        self._banner.pack(pady=theme.PAD)
+
+    def _still_running(self) -> None:
+        self.app.show_launch()      # explicit acceptance; the run stays open
+
+    def _stopped_at(self) -> None:
+        from logbook.ui.forms import _parse_time_field
+        when = _parse_time_field(self.time_entry.get(), self.app.tz)
+        try:
+            engine.stop(self.app.d, when)
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc))
+            return
+        self.app.show_launch()

@@ -62,7 +62,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.check:
         app = App(d, host=args.host, port=args.port,
-                  startup_warnings=warnings, sails=cfg.sails, start_reader=False)
+                  startup_warnings=warnings, sails=cfg.sails,
+                  backdate_tolerance_sec=cfg.backdate_tolerance_sec, start_reader=False)
         app.root.withdraw()
         app.root.update()
         app.root.destroy()
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     App(d, host=args.host, port=args.port, startup_warnings=warnings,
-        sails=cfg.sails).run()
+        sails=cfg.sails, backdate_tolerance_sec=cfg.backdate_tolerance_sec).run()
 
 
 if __name__ == "__main__":

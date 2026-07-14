@@ -25,9 +25,9 @@ import json
 import tkinter as tk
 from datetime import datetime, timezone
 
-from logbook import db
+from logbook import db, engine
 from logbook.ui import render, theme
-from logbook.ui.app import _big_button
+from logbook.ui.app import _big_button, passage_next_kind, write_event
 
 _PRECIP_TYPES = ("", "none", "rain", "drizzle", "hail", "sleet", "snow")
 _INTENSITIES = ("", "light", "moderate", "heavy")
@@ -491,3 +491,226 @@ class MultiTickView(tk.Frame):
 
 def multi_form(parent, app, session):
     return MultiTickView(parent, app, session)
+
+
+# -- events -------------------------------------------------------------------
+
+def _plain_entry(app, parent, width=10):
+    return tk.Entry(parent, width=width, bg=theme.BG_PANEL, fg=theme.FG,
+                    insertbackground=theme.FG, bd=0, highlightthickness=1,
+                    highlightbackground=theme.BG_BUTTON, font=app.font_base)
+
+
+def _time_entry(app, parent):
+    entry = _plain_entry(app, parent, width=6)
+    entry.insert(0, datetime.now(timezone.utc).astimezone(app.tz).strftime("%H:%M"))
+    return entry
+
+
+def _labelled_box(app, parent, text):
+    return tk.LabelFrame(parent, text=text, bg=theme.BG, fg=theme.FG_MUTED,
+                         font=app.font_small, bd=1, labelanchor="nw",
+                         padx=theme.PAD, pady=theme.PAD)
+
+
+class DepartArriveForm(tk.Frame):
+    """Depart/Arrive: time, auto position (suppressed if back-dated), place name
+    with autocomplete, remarks. The button's state is derived, not stored (§6.4)."""
+
+    def __init__(self, parent, app, session):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session
+        self.kind = passage_next_kind(app.d, session["id"])
+
+        header = tk.Frame(self, bg=theme.BG)
+        header.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+        tk.Label(header, text="Depart" if self.kind == "departure" else "Arrive",
+                 bg=theme.BG, fg=theme.FG, font=app.font_large).pack(side="left")
+        tk.Label(header, text="Time", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).pack(side="left", padx=(theme.PAD * 2, 2))
+        self.time_entry = _time_entry(app, header)
+        self.time_entry.pack(side="left")
+
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+        tk.Label(body, text="Place", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).grid(row=0, column=0, sticky="e")
+        self.location = _plain_entry(app, body, width=28)
+        self.location.grid(row=0, column=1, padx=theme.PAD, sticky="w")
+        names = app.d.location_names()
+        if names:
+            var = tk.StringVar(value="")
+            menu = tk.OptionMenu(body, var, *names, command=self._pick_place)
+            menu.configure(bg=theme.BG_BUTTON, fg=theme.FG, highlightthickness=0,
+                           activebackground=theme.ACCENT, font=app.font_base)
+            menu.grid(row=0, column=2, padx=2)
+        tk.Label(body, text="Remarks", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).grid(row=1, column=0, sticky="e", pady=(theme.PAD, 0))
+        self.remarks = _plain_entry(app, body, width=40)
+        self.remarks.grid(row=1, column=1, columnspan=2, padx=theme.PAD, sticky="w",
+                          pady=(theme.PAD, 0))
+
+        tk.Label(self, text=("Position, COG and SOG are captured automatically — and "
+                             "suppressed if the time is materially back-dated. The named "
+                             "place is what carries the record then; a location is never "
+                             "fabricated."),
+                 bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small,
+                 wraplength=theme.DEFAULT_W - 60, justify="left").pack(
+            fill="x", padx=theme.PAD, pady=theme.PAD)
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", self._cancel).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Save", self._save).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+
+    def _pick_place(self, value):
+        self.location.delete(0, "end")
+        self.location.insert(0, value)
+
+    def _cancel(self):
+        self.app.show_session(self.session)
+
+    def _save(self):
+        when = _parse_time_field(self.time_entry.get(), self.app.tz)
+        write_event(self.app, self.session, when=when, event_kind=self.kind,
+                    location_name=_opt_entry(self.location),
+                    remarks=_opt_entry(self.remarks))
+        self.app.show_session(self.session)
+
+
+class EngineFormView(tk.Frame):
+    """Engine… — the retrospective actions (§6.5). The live ▶/■ button covers the
+    common case; this covers back-dating, completed runs, and issues."""
+
+    def __init__(self, parent, app, session):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.session = session
+        state = engine.timer_state(app.d)
+        running = state.status is engine.TimerStatus.RUNNING
+
+        tk.Label(self, text="Engine", bg=theme.BG, fg=theme.FG,
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+        status = f"running since {state.run['started_utc']}" if running else "stopped"
+        tk.Label(self, text=f"Timer: {status}", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).pack(anchor="w", padx=theme.PAD)
+
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+
+        if running:
+            box = _labelled_box(app, body, "Stop (back-dated)")
+            box.pack(fill="x", pady=theme.PAD)
+            self.stop_time = _time_entry(app, box)
+            self.stop_time.pack(side="left", padx=theme.PAD)
+            _big_button(box, "Stop", self._stop).pack(side="left", padx=theme.PAD)
+        else:
+            box = _labelled_box(app, body, "Start (back-dated)")
+            box.pack(fill="x", pady=theme.PAD)
+            self.start_time = _time_entry(app, box)
+            self.start_time.pack(side="left", padx=theme.PAD)
+            _big_button(box, "Start", self._start).pack(side="left", padx=theme.PAD)
+
+            box2 = _labelled_box(app, body, "Add completed run")
+            box2.pack(fill="x", pady=theme.PAD)
+            tk.Label(box2, text="Duration min", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left")
+            self.duration = _plain_entry(app, box2, width=6)
+            self.duration.pack(side="left", padx=(2, theme.PAD))
+            tk.Label(box2, text="or from", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left")
+            self.from_time = _plain_entry(app, box2, width=6)
+            self.from_time.pack(side="left", padx=2)
+            tk.Label(box2, text="to", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left")
+            self.to_time = _plain_entry(app, box2, width=6)
+            self.to_time.pack(side="left", padx=2)
+            _big_button(box2, "Add run", self._add_completed).pack(side="left", padx=theme.PAD)
+
+        box3 = _labelled_box(app, body, "Issue (remarks required)")
+        box3.pack(fill="x", pady=theme.PAD)
+        self.issue = _plain_entry(app, box3, width=44)
+        self.issue.pack(side="left", padx=theme.PAD)
+        _big_button(box3, "Log issue", self._log_issue).pack(side="left", padx=theme.PAD)
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=app.font_small,
+                                wraplength=theme.DEFAULT_W - 60, justify="left", anchor="w")
+        self._banner.pack(fill="x", padx=theme.PAD)
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Back to log", self._cancel).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+
+    def _cancel(self):
+        self.app.show_session(self.session)
+
+    def _finish(self, result):
+        # Warnings are shown, never swallowed; the skipper decides what to do.
+        if result.warnings:
+            self._banner.configure(text="; ".join(result.warnings), fg=theme.WARN)
+        else:
+            self.app.show_session(self.session)
+
+    def _start(self):
+        when = _parse_time_field(self.start_time.get(), self.app.tz)
+        try:
+            result = engine.start(self.app.d, when, session_id=self.session["id"])
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        write_event(self.app, self.session, when=when, event_kind="engine_on",
+                    engine_run_id=result.run_id)
+        self._finish(result)
+
+    def _stop(self):
+        when = _parse_time_field(self.stop_time.get(), self.app.tz)
+        try:
+            result = engine.stop(self.app.d, when)
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        write_event(self.app, self.session, when=when, event_kind="engine_off",
+                    engine_run_id=result.run_id)
+        self._finish(result)
+
+    def _add_completed(self):
+        started_txt, stopped_txt = self.from_time.get().strip(), self.to_time.get().strip()
+        when = datetime.now(timezone.utc)
+        try:
+            if started_txt and stopped_txt:
+                started = _parse_time_field(started_txt, self.app.tz)
+                stopped = _parse_time_field(stopped_txt, self.app.tz)
+                result = engine.add_completed(self.app.d, started=started, stopped=stopped,
+                                              session_id=self.session["id"])
+                when = stopped
+            else:
+                result = engine.add_completed(self.app.d, duration_min=_num(self.duration.get()),
+                                              session_id=self.session["id"])
+        except engine.EngineError as exc:
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        write_event(self.app, self.session, when=when, event_kind="engine_duration",
+                    engine_run_id=result.run_id,
+                    remarks=f"{result.duration_min:g} min run logged")
+        self._finish(result)
+
+    def _log_issue(self):
+        text = _opt_entry(self.issue)
+        if not text:   # an issue with no description is nothing (§6.5)
+            self._banner.configure(
+                text="remarks are required — an issue with no description is nothing",
+                fg=theme.BAD)
+            return
+        write_event(self.app, self.session, when=datetime.now(timezone.utc),
+                    event_kind="engine_issue", remarks=text)
+        self.app.show_session(self.session)
+
+
+def depart_arrive_form(parent, app, session):
+    return DepartArriveForm(parent, app, session)
+
+
+def engine_form(parent, app, session):
+    return EngineFormView(parent, app, session)

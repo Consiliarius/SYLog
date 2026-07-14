@@ -332,6 +332,22 @@ class Database:
             params.append(limit)
         return self.conn.execute(sql, params).fetchall()
 
+    def last_passage_event(self, session_id) -> sqlite3.Row | None:
+        """The last departure/arrival in the session. The Depart/Arrive button
+        derives its state from this, never from a variable (invariant 3)."""
+        return self.conn.execute(
+            "SELECT * FROM entry WHERE session_id = ? AND deleted = 0 "
+            "AND event_kind IN ('departure', 'arrival') ORDER BY id DESC LIMIT 1",
+            (session_id,)).fetchone()
+
+    def location_names(self, limit=20) -> list[str]:
+        """Recent distinct place names, for the departure/arrival autocomplete."""
+        rows = self.conn.execute(
+            "SELECT location_name FROM entry WHERE deleted = 0 "
+            "AND location_name IS NOT NULL AND location_name <> '' "
+            "GROUP BY location_name ORDER BY MAX(id) DESC LIMIT ?", (limit,)).fetchall()
+        return [r["location_name"] for r in rows]
+
     # -- entries --------------------------------------------------------------
 
     def insert_entry(self, **fields) -> int:
