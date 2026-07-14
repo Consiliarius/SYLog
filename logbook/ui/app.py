@@ -196,6 +196,10 @@ class App:
     def show_session(self, session_row) -> None:
         self.views.show(SessionView(self._content, self, session_row))
 
+    def show_observation_form(self, session_row) -> None:
+        from logbook.ui import forms  # lazy: forms imports back into this module
+        self.views.show(forms.observation_form(self._content, self, session_row))
+
     def run(self) -> None:
         self.root.mainloop()
 
@@ -332,7 +336,9 @@ class SessionView(tk.Frame):
         bar.pack(side="top", fill="x")
         _big_button(bar, "End Session", self._end_session).pack(
             side="left", padx=theme.PAD, pady=theme.PAD)
-        tk.Label(bar, text="entry forms — next sub-stage", bg=theme.BG_PANEL,
+        _big_button(bar, "Observation", self._observation).pack(
+            side="left", padx=theme.PAD, pady=theme.PAD)
+        tk.Label(bar, text="more presets — next sub-stage", bg=theme.BG_PANEL,
                  fg=theme.FG_MUTED, font=self.app.font_small).pack(side="left", padx=theme.PAD)
 
         # Display-only, dense, newest at top. Rebuilding from the top means there
@@ -357,3 +363,6 @@ class SessionView(tk.Frame):
         self.app.d.close_session(
             self.session["id"], closed_utc=db.to_iso_utc(datetime.now(timezone.utc)))
         self.app.show_launch()
+
+    def _observation(self) -> None:
+        self.app.show_observation_form(self.session)
