@@ -31,7 +31,7 @@ from datetime import timezone, tzinfo
 from pathlib import Path
 
 from logbook import db, passage
-from logbook.ui.render import format_position  # pure formatter; imports no Tk
+from logbook.ui.render import checklist_summary, format_position  # pure; import no Tk
 
 ENTRY_COLUMNS = (
     "id", "session_id", "group_id",
@@ -44,7 +44,8 @@ ENTRY_COLUMNS = (
     "sail_plan", "sail_state_json",
     "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
     "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
-    "location_name", "engine_run_id", "radio_channel", "radio_station",
+    "location_name", "engine_run_id", "checklist_run_id", "task_issue_id",
+    "radio_channel", "radio_station",
     "remarks",
     "deleted", "deleted_utc", "deleted_reason",
 )
@@ -65,6 +66,23 @@ SESSION_COLUMNS = (
 SUMMARY_COLUMNS = SESSION_COLUMNS + ("time_under_way_min", "time_stationary_min")
 
 CUMULATIVE_COLUMNS = ENGINE_COLUMNS + ("engine_hours_baseline", "engine_hours_baseline_note")
+
+# Checklists (§14.7): a legible 'result' column (the summary) plus the raw
+# items_json snapshot — legible first, parseable second, like sail_plan +
+# sail_state_json. Readable forever without config.json (§8).
+CHECKLIST_COLUMNS = (
+    "id", "session_id", "checklist_key", "title",
+    "started_utc", "completed_utc", "completed_local",
+    "result", "items_json", "remarks",
+    "edited", "edited_utc", "deleted", "deleted_utc", "deleted_reason",
+)
+
+# Tasks & Issues (§14.7): the cross-cutting maintenance record.
+TASK_ISSUE_COLUMNS = (
+    "id", "kind", "session_id", "source", "checklist_run_id", "engine_run_id",
+    "raised_utc", "raised_local", "description", "status", "done_utc", "done_note",
+    "edited", "edited_utc", "deleted", "deleted_utc", "deleted_reason",
+)
 
 
 def _write_csv(path: Path, columns, rows) -> Path:
@@ -116,6 +134,32 @@ def _entry_row(row, *, tz: tzinfo, sails) -> dict:
     return out
 
 
+def _checklist_row(run, *, tz: tzinfo) -> dict:
+    """A checklist run as a CSV row: the stored columns, a local completion time,
+    and the legible 'result' summary composed from the snapshot (§14.7)."""
+    out = {col: run[col] for col in run.keys() if col in CHECKLIST_COLUMNS}
+    out["completed_local"] = db.parse_iso_utc(run["completed_utc"]).astimezone(tz).isoformat()
+    out["result"] = checklist_summary(run["title"], run["items_json"])
+    return out
+
+
+def _task_issue_row(row, *, tz: tzinfo) -> dict:
+    out = {col: row[col] for col in row.keys() if col in TASK_ISSUE_COLUMNS}
+    out["raised_local"] = db.parse_iso_utc(row["raised_utc"]).astimezone(tz).isoformat()
+    return out
+
+
+def export_tasks_and_issues(d, out_dir, *, tz: tzinfo = timezone.utc) -> Path:
+    """All tasks and issues, all sessions — regenerated on every export (§14.7).
+
+    The sibling of engine-cumulative.csv: the one maintenance record that cuts
+    across sessions and must not be reconstructable only by concatenating session
+    files. Deleted rows are included and flagged, never dropped.
+    """
+    rows = [_task_issue_row(r, tz=tz) for r in d.task_issues_including_deleted()]
+    return _write_csv(Path(out_dir) / "tasks-and-issues.csv", TASK_ISSUE_COLUMNS, rows)
+
+
 def export_engine_cumulative(d, out_dir) -> Path:
     """All engine runs, all sessions — regenerated on every export.
 
@@ -150,7 +194,11 @@ def export_session(d, session_id, out_dir, *, sails=None,
                     for r in d.engine_runs_including_deleted(session_id))),
         _write_csv(out_dir / f"{tag}-summary.csv", SUMMARY_COLUMNS,
                    [_summary_row(d, session)] if session else []),
+        _write_csv(out_dir / f"{tag}-checklists.csv", CHECKLIST_COLUMNS,
+                   (_checklist_row(r, tz=tz)
+                    for r in d.checklist_runs_including_deleted(session_id))),
         export_engine_cumulative(d, out_dir),
+        export_tasks_and_issues(d, out_dir, tz=tz),
     ]
     return written
 

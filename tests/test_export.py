@@ -11,6 +11,7 @@ Run: ``python -m unittest discover -s tests -t .``
 """
 
 import csv
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -51,13 +52,14 @@ class ExportTestCase(unittest.TestCase):
 
     # -- structure ------------------------------------------------------------
 
-    def test_writes_the_four_files(self):
+    def test_writes_all_session_files(self):
         self._entry()
         paths = self._export()
         names = {p.name for p in paths}
         self.assertEqual(names, {
             "session-001-entries.csv", "session-001-engine.csv",
-            "session-001-summary.csv", "engine-cumulative.csv"})
+            "session-001-summary.csv", "session-001-checklists.csv",
+            "engine-cumulative.csv", "tasks-and-issues.csv"})
         for path in paths:
             self.assertTrue(path.exists())
 
@@ -160,6 +162,44 @@ class ExportTestCase(unittest.TestCase):
         row = read_csv(self.out / "session-001-summary.csv")[0]
         self.assertEqual(float(row["time_under_way_min"]), 150.0)    # 09:30 -> 12:00
         self.assertEqual(float(row["time_stationary_min"]), 90.0)    # 240 − 150
+
+    # -- checklists and Tasks & Issues (§14.7) ---------------------------------
+
+    def test_checklists_csv_legible_and_parseable(self):
+        self.d.insert_checklist_run(
+            checklist_key="iwobble", title="I-WOBBLE — engine start",
+            items_json='[{"label":"Oil — dipstick","checked":1,"note":"low"},'
+                       '{"label":"Belts","checked":0}]',
+            completed_utc="2026-07-13T08:15:00Z", session_id=self.sid, remarks="ok")
+        self._export()
+        rows = read_csv(self.out / "session-001-checklists.csv")
+        self.assertEqual(list(rows[0].keys()), list(export.CHECKLIST_COLUMNS))
+        self.assertIn("1/2", rows[0]["result"])            # legible summary, config-free
+        self.assertIn("Belts", rows[0]["result"])          # unticked item named
+        self.assertEqual(json.loads(rows[0]["items_json"])[0]["note"], "low")  # raw preserved
+
+    def test_tasks_and_issues_csv_is_cross_session(self):
+        self.d.insert_task_issue(kind="issue", source="engine", description="Oil low",
+                                 raised_utc="2026-07-13T15:01:00Z", session_id=self.sid)
+        self.d.insert_task_issue(kind="task", source="manual", description="Order anode",
+                                 raised_utc="2026-07-14T09:00:00Z")   # no session
+        self._export()
+        rows = read_csv(self.out / "tasks-and-issues.csv")
+        self.assertEqual(list(rows[0].keys()), list(export.TASK_ISSUE_COLUMNS))
+        self.assertEqual(len(rows), 2)                     # all sessions, incl. sessionless
+        self.assertEqual({r["kind"] for r in rows}, {"issue", "task"})
+
+    def test_deleted_task_issue_exported_and_flagged(self):
+        keep = self.d.insert_task_issue(kind="issue", source="manual", description="keep",
+                                        raised_utc="2026-07-13T15:00:00Z")
+        gone = self.d.insert_task_issue(kind="issue", source="manual", description="mistake",
+                                        raised_utc="2026-07-13T15:01:00Z")
+        self.d.soft_delete_task_issue(gone, "duplicate")
+        self._export()
+        rows = {int(r["id"]): r for r in read_csv(self.out / "tasks-and-issues.csv")}
+        self.assertEqual(rows[keep]["deleted"], "0")
+        self.assertEqual(rows[gone]["deleted"], "1")
+        self.assertEqual(rows[gone]["deleted_reason"], "duplicate")
 
     # -- atomicity / re-export --------------------------------------------------
 
