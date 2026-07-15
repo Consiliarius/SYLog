@@ -153,14 +153,14 @@ class App:
     # -- setup ----------------------------------------------------------------
 
     def _apply_theme(self) -> None:
+        family = _preferred_font_family(self.root)
         self.font_base = tkfont.nametofont("TkDefaultFont")
-        self.font_base.configure(size=theme.SIZE_BASE)
+        self.font_base.configure(family=family, size=theme.SIZE_BASE)
         for name in ("TkTextFont", "TkMenuFont", "TkHeadingFont"):
             try:
-                tkfont.nametofont(name).configure(size=theme.SIZE_BASE)
+                tkfont.nametofont(name).configure(family=family, size=theme.SIZE_BASE)
             except tk.TclError:
                 pass
-        family = self.font_base.cget("family")
         self.font_small = tkfont.Font(family=family, size=theme.SIZE_SMALL)
         self.font_large = tkfont.Font(family=family, size=theme.SIZE_LARGE)
         self.root.configure(bg=theme.BG)
@@ -206,11 +206,16 @@ class App:
             self.root.attributes("-fullscreen", False)
 
     def toggle_theme(self, event=None) -> str:
-        """F2: light (daylight) ⇄ dark (night). Widgets read their colours at
-        construction, so the chrome is restyled and the current view re-shown."""
+        """F2: light (daylight) ⇄ dark (night). Tk widgets read their colours at
+        construction, so switching restyles the chrome and REBUILDS the current
+        view from its factory. (``_reshow()`` alone only constructs the view; it
+        must be handed to ``views.show`` to actually replace what is on screen —
+        that was the bug where only the status bar recoloured.) An in-progress,
+        unsaved form is reset by the rebuild, which is acceptable for a toggle
+        pressed at rest at the chart table, not mid-entry."""
         mode = theme.use(theme.other())
         self._restyle()
-        self._reshow()
+        self.views.show(self._reshow())
         return mode
 
     def _restyle(self) -> None:
@@ -480,15 +485,49 @@ class App:
 
 # -- views --------------------------------------------------------------------
 
+def _preferred_font_family(root) -> str:
+    """A clean sans-serif if the system has one, else Tk's default.
+
+    Tk's stock font reads as dated; DejaVu Sans / Noto Sans are near-universal on
+    Debian, Segoe UI on the Windows dev box. Falls back gracefully if none are
+    installed, so this never fails on an unexpected system."""
+    available = set(tkfont.families(root))
+    for family in ("Segoe UI", "Noto Sans", "DejaVu Sans", "Cantarell", "Helvetica"):
+        if family in available:
+            return family
+    return tkfont.nametofont("TkDefaultFont").cget("family")
+
+
 def _big_button(parent, text, command, *, width=0):
-    return tk.Button(
+    """A flat button with a hover state, a pointer cursor and a thin border.
+
+    Tk has no rounded corners, gradients or shadows, but a hover shift and a
+    little edge definition go a long way from the dead-flat default. Colours are
+    derived from the palette via ``theme.mix``, so a button tracks light/dark
+    automatically. Padding keeps the touch target >= 44 px (invariant 10)."""
+    base = theme.BG_BUTTON
+    hover = theme.mix(base, theme.FG, 0.16)
+    border = theme.mix(base, theme.FG, 0.30)
+    btn = tk.Button(
         parent, text=text, command=command,
-        bg=theme.BG_BUTTON, fg=theme.FG,
-        activebackground=theme.ACCENT, activeforeground=theme.FG,
+        bg=base, fg=theme.FG,
+        activebackground=hover, activeforeground=theme.FG,
         disabledforeground=theme.FG_MUTED,
-        bd=0, highlightthickness=0,
-        padx=theme.PAD * 2, pady=theme.PAD * 2, width=width,
+        bd=0, relief="flat", highlightthickness=1,
+        highlightbackground=border, highlightcolor=border,
+        padx=theme.PAD * 2, pady=theme.PAD + 4, width=width, cursor="hand2",
     )
+
+    def _enter(_event):
+        if str(btn["state"]) != "disabled":
+            btn.configure(bg=hover)
+
+    def _leave(_event):
+        btn.configure(bg=base)
+
+    btn.bind("<Enter>", _enter)
+    btn.bind("<Leave>", _leave)
+    return btn
 
 
 def _hm(minutes: float) -> str:

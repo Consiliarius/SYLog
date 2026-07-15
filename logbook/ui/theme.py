@@ -49,6 +49,17 @@ def other(mode: str | None = None) -> str:
     return "dark" if (mode or MODE) == "light" else "light"
 
 
+def mix(hex_a: str, hex_b: str, t: float) -> str:
+    """Blend two ``#rrggbb`` colours; ``t=0`` → a, ``t=1`` → b.
+
+    Used to derive button hover and border shades from the palette, so they
+    track light/dark automatically instead of being hand-picked per mode.
+    """
+    a = tuple(int(hex_a[i:i + 2], 16) for i in (1, 3, 5))
+    b = tuple(int(hex_b[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
 use("light")
 
 # Font sizes (points), applied to Tk's named fonts at startup

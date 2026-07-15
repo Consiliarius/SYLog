@@ -63,6 +63,20 @@ class GpsStateTestCase(unittest.TestCase):
         self.assertEqual(s.indicator()[1], theme.BAD)
 
 
+class ThemeTestCase(unittest.TestCase):
+    def test_mix_blends_two_colours(self):
+        self.assertEqual(theme.mix("#000000", "#ffffff", 0.0), "#000000")
+        self.assertEqual(theme.mix("#000000", "#ffffff", 1.0), "#ffffff")
+        self.assertEqual(theme.mix("#000000", "#ffffff", 0.5), "#808080")
+
+    def test_light_and_dark_differ(self):
+        self.addCleanup(theme.use, "light")
+        theme.use("light")
+        light_bg = theme.BG
+        theme.use("dark")
+        self.assertNotEqual(theme.BG, light_bg)
+
+
 class MainLocationGuardTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -164,17 +178,31 @@ class AppShellTestCase(unittest.TestCase):
 
     # -- theme (light for daylight, dark for night) ----------------------------
 
-    def test_theme_toggle_switches_palette_and_restyles(self):
+    def test_theme_toggle_rebuilds_the_view_in_the_new_palette(self):
+        # The bug was that toggling recoloured only the chrome: the content view
+        # was constructed but never shown, so the old-themed view stayed put.
         self.addCleanup(theme.use, "light")          # leave the module as we found it
         self.assertEqual(theme.MODE, "light")
         daylight_bg = theme.BG
+        old_view = self.app.views.current
 
         self.assertEqual(self.app.toggle_theme(), "dark")
         self.assertNotEqual(theme.BG, daylight_bg)
-        self.assertEqual(str(self.app.root.cget("bg")), theme.BG)   # chrome restyled
+        self.assertEqual(str(self.app.root.cget("bg")), theme.BG)            # chrome restyled
+        self.assertIsNot(self.app.views.current, old_view)                  # view rebuilt...
+        self.assertEqual(str(self.app.views.current.cget("bg")), theme.BG)  # ...in the new palette
 
         self.assertEqual(self.app.toggle_theme(), "light")
         self.assertEqual(theme.BG, daylight_bg)
+        self.assertEqual(str(self.app.views.current.cget("bg")), theme.BG)
+
+    def test_buttons_use_the_palette_and_a_pointer_cursor(self):
+        from logbook.ui.app import _big_button
+        btn = _big_button(self.app._content, "x", lambda: None)
+        self.addCleanup(btn.destroy)
+        self.assertEqual(str(btn.cget("cursor")), "hand2")
+        self.assertEqual(str(btn.cget("bg")), theme.BG_BUTTON)
+        self.assertEqual(int(btn.cget("highlightthickness")), 1)   # a thin border for definition
 
     # -- clock offset (§3.4) ---------------------------------------------------
 
