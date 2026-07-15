@@ -91,6 +91,16 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(cfg.checklists[0]["key"], "iwobble")
         self.assertEqual(cfg.checklists[0]["items"][1]["note"], True)
 
+    def test_locations_default_empty_and_read_when_set(self):
+        self.cfg_path.write_text(json.dumps(EXAMPLE), encoding="utf-8")
+        self.assertEqual(
+            config.load(self.cfg_path, example_path=self.example_path).locations, [])
+        data = json.loads(json.dumps(EXAMPLE))
+        data["locations"] = ["Home berth", "Fuel pontoon"]
+        self.cfg_path.write_text(json.dumps(data), encoding="utf-8")
+        cfg = config.load(self.cfg_path, example_path=self.example_path)
+        self.assertEqual(cfg.locations, ["Home berth", "Fuel pontoon"])
+
     def test_missing_required_key_raises(self):
         broken = json.loads(json.dumps(EXAMPLE))
         del broken["paths"]["database"]

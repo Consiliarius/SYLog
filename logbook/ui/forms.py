@@ -618,6 +618,16 @@ def _comment_box(app, parent, *, height=2, width=50):
     return box
 
 
+def _merged_locations(standing, historical):
+    """Standing config places first (always available, every passage), then any
+    recent history not already listed. Order preserved, duplicates removed."""
+    merged = list(standing)
+    for name in historical:
+        if name not in merged:
+            merged.append(name)
+    return merged
+
+
 class DepartArriveForm(tk.Frame):
     """Depart/Arrive: time, auto position (suppressed if back-dated), place name
     with autocomplete, remarks. The button's state is derived, not stored (§6.4)."""
@@ -643,7 +653,9 @@ class DepartArriveForm(tk.Frame):
                  font=app.font_small).grid(row=0, column=0, sticky="e")
         self.location = _plain_entry(app, body, width=28)
         self.location.grid(row=0, column=1, padx=theme.PAD, sticky="w")
-        names = app.d.location_names()
+        # Standing places from config (home port, regular stops) come first and
+        # are always offered; recent history follows, de-duplicated (§14).
+        names = _merged_locations(app.locations, app.d.location_names())
         if names:
             var = tk.StringVar(value="")
             menu = tk.OptionMenu(body, var, *names, command=self._pick_place)

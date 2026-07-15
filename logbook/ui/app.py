@@ -94,6 +94,8 @@ class App:
         startup_warnings: list[str] | None = None,
         sails: list[dict] | None = None,
         checklists: list[dict] | None = None,
+        vessel_name: str = "",
+        locations: list[str] | None = None,
         backdate_tolerance_sec: float = 60.0,
         autolog_interval_min: float = 30.0,
         distance_sample_sec: float = 30.0,
@@ -109,6 +111,8 @@ class App:
         self.d = d
         self.sails = sails
         self.checklists = checklists or []
+        self.vessel_name = vessel_name
+        self.locations = locations or []
         self.db_path = db_path
         self.backup_dir = backup_dir
         self.backup_retention = backup_retention
@@ -751,22 +755,30 @@ class LaunchView(tk.Frame):
         self.refresh()
 
     def _build(self) -> None:
-        # Engine hours moved to the always-visible status bar; the launch view is
-        # now the action buttons (a 2×3 grid — five entry points fit without
-        # shrinking the touch targets, §14.9) and the two status lines.
+        # A title fills what was a blank launch view; the vessel name comes from
+        # config. Engine hours live on the always-visible status bar.
+        title = "Simple Yacht Log"
+        if self.app.vessel_name:
+            title += f":  {self.app.vessel_name}"
+        self._title = tk.Label(self, text=title, bg=theme.BG, fg=theme.FG,
+                               font=self.app.font_large)
+        self._title.pack(pady=(theme.PAD * 4, theme.PAD))
+
+        # Action buttons, a 2×3 grid (§14.9). Start Session and Engine keep their
+        # top-row positions with a button-sized gap between them (column 1 left
+        # empty); View Log drops to the second row, beneath Engine.
         grid = tk.Frame(self, bg=theme.BG)
-        grid.pack(pady=(theme.PAD * 5, theme.PAD * 2))
+        grid.pack(pady=(theme.PAD, theme.PAD * 2))
         self._start_btn = _big_button(grid, "Start Session", self._start_session, width=14)
         self._start_btn.grid(row=0, column=0, padx=theme.PAD, pady=theme.PAD)
-        self._log_btn = _big_button(grid, "View Log", self._view_log, width=14)
-        self._log_btn.grid(row=0, column=1, padx=theme.PAD, pady=theme.PAD)
         self._engine_btn = _big_button(grid, "Engine ▶", self._toggle_engine, width=14)
         self._engine_btn.grid(row=0, column=2, padx=theme.PAD, pady=theme.PAD)
         self._checklists_btn = _big_button(grid, "Checklists", self._checklists, width=14)
         self._checklists_btn.grid(row=1, column=0, padx=theme.PAD, pady=theme.PAD)
         self._tasks_btn = _big_button(grid, "Tasks & Issues", self._tasks, width=14)
         self._tasks_btn.grid(row=1, column=1, padx=theme.PAD, pady=theme.PAD)
-        # row 1, column 2 is left spare — headroom for a future entry point.
+        self._log_btn = _big_button(grid, "View Log", self._view_log, width=14)
+        self._log_btn.grid(row=1, column=2, padx=theme.PAD, pady=theme.PAD)
 
         # Two separate lines with two different owners, deliberately not one:
         #   _banner  — periodic STATUS, rewritten by refresh() on every 250 ms

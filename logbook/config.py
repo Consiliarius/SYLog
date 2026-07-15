@@ -76,6 +76,13 @@ class Config:
         (the Checklists button simply shows an empty list)."""
         return list(self._data.get("checklists", []))
 
+    @property
+    def locations(self) -> list[str]:
+        """Standing departure/arrival place names available on every passage — a
+        home port or regular stop. Merged ahead of recent history in the
+        Depart/Arrive picker. Top-level, optional; defaults to []."""
+        return [str(x) for x in self._data.get("locations", [])]
+
     # -- logging thresholds (defaults mirror config.example.json) --------------
 
     def _logging(self, key: str, default: float) -> float:

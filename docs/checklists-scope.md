@@ -185,6 +185,12 @@ where a reading is routinely expected. Config expresses a *hint*, never a *gate*
 loads (as `backup.*` already does, config.py). No checklists configured → the
 Checklists button shows an empty list, nothing breaks.
 
+**Standing locations.** A top-level `"locations"` array (also optional, defaults
+`[]`) lists place names available on *every* passage — a home port, a regular
+stop. The Depart/Arrive picker offers these first, then recent history
+de-duplicated behind them, so the common berths are always one tap away without
+waiting for them to appear in the log's history.
+
 ---
 
 ## 14.5 Behaviour — running a checklist
@@ -193,13 +199,26 @@ Checklists button shows an empty list, nothing breaks.
 session toolbar (§6.1, row 2). From either, a short picker lists the configured
 checklists; choosing one opens the tick-form.
 
-**The form.** One row per item: a ≥44 px tickbox, the label, and the on-demand
-note field. A single run-level **Remarks / Observations** box at the foot. Footer
-is `[Cancel] [Save]` — consistent with the event forms (§6.6). No page-stepping;
-a checklist is one screen.
+**The form.** One item per block: a font-scaled tickbox and a **bold title** on
+one line, the **italic descriptor beneath** (the label is split at its dash —
+"Water" vs *"raw-water seacock open, weed filter clear"*), then an on-demand
+**Add note/issue** field, closed off by a divider so each item reads as a unit.
+A run-level **Remarks / Observations** box sits at the foot. Footer is `[Cancel]
+[Save] [Save & raise issues]`. No page-stepping; a checklist is one screen, which
+scrolls if it exceeds the 800×480 floor. *(These specifics come from first-pass
+netbook feedback: the tickboxes were too small, the item font too large, the
+note field divorced from its item and too cramped.)*
 
 - **No item is mandatory and none is unskippable** (the stated requirement, and
   §4.4). Save is always reachable with any subset ticked.
+- **The per-item note doubles as the issue field.** A problem seen at an item —
+  "belt worn", "water in the bilge" — is typed once, in that item's note. Plain
+  **Save** records the checklist as-is and raises nothing; **Save & raise issues**
+  additionally turns every filled note into a `task_issue` linked to the run
+  (description `"<item title>: <note>"`, `source='checklist'`). This is the
+  no-double-entry resolution from first-pass feedback: the note and the issue are
+  the same text, and the two buttons are the whole choice (benign checklist →
+  Save; checklist that surfaced problems → Save & raise issues).
 - **Unticked items are recorded, not dropped.** The snapshot stores every item
   with its state, so "5 of 8, Gas not ticked" is preserved. Recording what was
   *actually* confirmed rather than presuming completion is §4.1 exactly, and it
@@ -252,9 +271,9 @@ Both are raised the same way, listed together, and closed the same way.
 
 **Where they come from.**
 
-- **From a checklist** — a **Raise task/issue** affordance on the checklist form,
-  linking `checklist_run_id` (e.g. an item ticked with the note "Oil low" turned
-  into an issue).
+- **From a checklist** — **Save & raise issues** turns each item's filled note
+  into an issue linked by `checklist_run_id` (§14.5). The note is the issue text,
+  so nothing is retyped.
 - **From the engine** — the existing **Engine… → Issue** action now *also* writes
   a `task_issue` row (`source='engine'`, `engine_run_id` linked) alongside its log
   event, so engine defects land in the same list.
@@ -392,6 +411,22 @@ cheap to add later):**
 
 No schema or data change is needed for the future HTML view; it is a pure
 render-and-query concern over what §14 already stores.
+
+## 14.11 Future development backlog (flagged, not built)
+
+Raised during first-pass testing; recorded here so they are not lost, with no
+commitment to build yet:
+
+- **Dedicated engine-hours log**, reached from the cumulative-hours counter on
+  the status bar (§6.10): a view of accrued runtime — the disclosed/estimated
+  baseline (§7) first, then every run logged since, so the number on the bar can
+  be drilled into rather than merely read.
+- **"Log Engine Start?" prompt** after completing (or saving-and-raising) an
+  engine-start checklist (I-WOBBLE): the checklist exists precisely because the
+  engine is about to run, so offering to start the engine timer there closes the
+  loop and guards against an unlogged run (§10.2). Would need a way to mark a
+  checklist as engine-starting in config (e.g. a `"starts_engine": true` flag).
+- **HTML review export** — see §14.10.
 
 ---
 

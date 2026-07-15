@@ -14,11 +14,24 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime, timezone
 
 from logbook import db
 from logbook.ui import render, theme
-from logbook.ui.app import _big_button, write_checklist_complete_event
+from logbook.ui.app import _big_button, raise_task_issue, write_checklist_complete_event
+
+
+def _item_fonts(app):
+    """Fonts for a checklist item: a bold title, an italic descriptor beneath, and
+    a note field — all smaller than the form default (first-pass feedback: item
+    text was too large). Derived from the base family so they track the theme."""
+    family = app.font_base.cget("family")
+    return {
+        "title": tkfont.Font(family=family, size=theme.SIZE_SMALL + 2, weight="bold"),
+        "desc": tkfont.Font(family=family, size=theme.SIZE_SMALL, slant="italic"),
+        "note": tkfont.Font(family=family, size=theme.SIZE_SMALL),
+    }
 
 
 def _text_box(app, parent, *, height=3, width=48):
@@ -54,41 +67,110 @@ class _ScrollBody(tk.Frame):
         self._canvas.yview_scroll(int(-event.delta / 120), "units")
 
 
-class _ChecklistItemRow:
-    """One item: a tickbox, the label, and an on-demand note. ``note: true`` shows
-    the note field open; otherwise a '＋ note' affordance reveals it — always
-    available, never forced (§14.4)."""
+class _TickBox(tk.Canvas):
+    """A checkbox drawn on a canvas so it scales with the item font and gives a
+    finger-sized target — Tk's native indicator is fixed-size and too small
+    (first-pass feedback §5). Clicking the box (or the title) toggles it."""
 
-    def __init__(self, app, parent, item, row):
-        self.label = item.get("label", "")
+    def __init__(self, parent, var, font):
+        self._size = font.metrics("linespace") + 6
+        super().__init__(parent, width=self._size, height=self._size, bg=theme.BG,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self._var = var
+        self.bind("<Button-1>", lambda e: self.toggle())
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        s = self._size
+        self.create_rectangle(3, 3, s - 3, s - 3, outline=theme.FG, width=2)
+        if self._var.get():
+            self.create_line(s * 0.24, s * 0.52, s * 0.44, s * 0.72,
+                             fill=theme.OK, width=3, capstyle="round")
+            self.create_line(s * 0.44, s * 0.72, s * 0.78, s * 0.26,
+                             fill=theme.OK, width=3, capstyle="round")
+
+    def toggle(self, _event=None):
+        self._var.set(not self._var.get())
+        self._draw()
+
+
+class _ChecklistItemRow:
+    """One item as a self-contained block (first-pass feedback §2–§4): a scalable
+    tickbox and a bold title on one line, an italic descriptor beneath, and an
+    on-demand note/issue field kept with the item, closed off by a divider.
+
+    The note field doubles as the issue field: 'Save & raise issues' turns every
+    filled note into a linked issue, so a problem seen at an item is typed once.
+    """
+
+    def __init__(self, app, parent, item, fonts):
+        self.raw = item.get("label", "")
+        title, descriptor = render.split_label(self.raw)
         self.checked = tk.BooleanVar(value=False)
-        tk.Checkbutton(parent, variable=self.checked, bg=theme.BG,
-                       activebackground=theme.BG, selectcolor=theme.BG_PANEL,
-                       highlightthickness=0, bd=0).grid(
-            row=row, column=0, sticky="n", padx=(0, 4), pady=3)
-        tk.Label(parent, text=self.label, bg=theme.BG, fg=theme.FG, font=app.font_base,
-                 wraplength=420, justify="left", anchor="w").grid(
-            row=row, column=1, sticky="w", pady=3)
-        self._note = tk.Entry(parent, bg=theme.BG_PANEL, fg=theme.FG,
-                              insertbackground=theme.FG, bd=0, highlightthickness=1,
-                              highlightbackground=theme.BG_BUTTON, font=app.font_small)
-        self._note_btn = tk.Button(parent, text="＋ note", command=self._reveal,
-                                   bg=theme.BG_BUTTON, fg=theme.FG_MUTED, bd=0,
-                                   highlightthickness=0, font=app.font_small,
-                                   cursor="hand2")
-        self._row = row
+        self._note = None
+        self._note_font = fonts["note"]
+
+        self.frame = tk.Frame(parent, bg=theme.BG)
+        self.frame.pack(fill="x", anchor="w", pady=(2, 0))
+
+        top = tk.Frame(self.frame, bg=theme.BG)
+        top.pack(fill="x", anchor="w")
+        self._box = _TickBox(top, self.checked, fonts["title"])
+        self._box.pack(side="left", anchor="n", padx=(0, theme.PAD))
+        title_lbl = tk.Label(top, text=title, bg=theme.BG, fg=theme.FG,
+                             font=fonts["title"], anchor="w", justify="left",
+                             cursor="hand2")
+        title_lbl.pack(side="left", anchor="w")
+        title_lbl.bind("<Button-1>", self._box.toggle)   # a bigger tap target
+
+        indent = self._box.winfo_reqwidth() + theme.PAD
+        if descriptor:
+            tk.Label(self.frame, text=descriptor, bg=theme.BG, fg=theme.FG_MUTED,
+                     font=fonts["desc"], wraplength=theme.DEFAULT_W - 160,
+                     justify="left", anchor="w").pack(fill="x", anchor="w",
+                                                      padx=(indent, 0))
+
+        self._note_area = tk.Frame(self.frame, bg=theme.BG)
+        self._note_area.pack(fill="x", anchor="w", padx=(indent, 0), pady=(2, 0))
+        self._note_btn = tk.Button(self._note_area, text="Add note/issue",
+                                   command=self._reveal, bg=theme.BG_BUTTON,
+                                   fg=theme.FG_MUTED, bd=0, highlightthickness=0,
+                                   font=fonts["desc"], cursor="hand2",
+                                   padx=theme.PAD, pady=2)
         if item.get("note"):
-            self._note.grid(row=row, column=2, sticky="ew", padx=(theme.PAD, 0), pady=3)
+            self._reveal()
         else:
-            self._note_btn.grid(row=row, column=2, sticky="e", padx=(theme.PAD, 0), pady=3)
+            self._note_btn.pack(anchor="w")
+
+        tk.Frame(self.frame, bg=theme.BG_PANEL, height=1).pack(
+            fill="x", pady=(theme.PAD, 0))
 
     def _reveal(self):
-        self._note_btn.grid_remove()
-        self._note.grid(row=self._row, column=2, sticky="ew", padx=(theme.PAD, 0), pady=3)
+        self._note_btn.pack_forget()
+        # A wrapping box that grows downward as it fills, rather than a one-line
+        # field text scrolls out of (first-pass feedback §4).
+        self._note = tk.Text(self._note_area, height=2, wrap="word",
+                             bg=theme.BG_PANEL, fg=theme.FG, insertbackground=theme.FG,
+                             bd=0, highlightthickness=1, highlightbackground=theme.BG_BUTTON,
+                             font=self._note_font)
+        self._note.pack(fill="x")
+        self._note.bind("<KeyRelease>", self._grow)
+        self._note.focus_set()
+
+    def _grow(self, _event=None):
+        lines = int(self._note.index("end-1c").split(".")[0])
+        self._note.configure(height=max(2, min(lines, 8)))
+
+    def note_text(self) -> str:
+        return self._note.get("1.0", "end").strip() if self._note is not None else ""
+
+    def title(self) -> str:
+        return render.split_label(self.raw)[0]
 
     def collect(self) -> dict:
-        note = self._note.get().strip() or None
-        return {"label": self.label,
+        note = self.note_text() or None
+        return {"label": self.raw,
                 "checked": 1 if self.checked.get() else 0, "note": note}
 
 
@@ -145,16 +227,14 @@ class ChecklistRunView(tk.Frame):
                  "recorded automatically.", bg=theme.BG, fg=theme.FG_MUTED,
                  font=app.font_small).pack(anchor="w", padx=theme.PAD)
 
+        self._fonts = _item_fonts(app)
         body = _ScrollBody(self)
         body.pack(fill="both", expand=True, padx=theme.PAD, pady=theme.PAD)
-        body.inner.columnconfigure(1, weight=1)
-        body.inner.columnconfigure(2, weight=1)
-        self.rows = [_ChecklistItemRow(app, body.inner, item, i)
-                     for i, item in enumerate(checklist_def.get("items", []))]
+        self.rows = [_ChecklistItemRow(app, body.inner, item, self._fonts)
+                     for item in checklist_def.get("items", [])]
 
         rframe = tk.Frame(body.inner, bg=theme.BG)
-        rframe.grid(row=len(self.rows), column=0, columnspan=3, sticky="ew",
-                    pady=(theme.PAD, 0))
+        rframe.pack(fill="x", anchor="w", pady=(theme.PAD, 0))
         tk.Label(rframe, text="Remarks / observations", bg=theme.BG, fg=theme.FG_MUTED,
                  font=app.font_small).pack(anchor="w")
         self.remarks = _text_box(app, rframe, height=3, width=60)
@@ -170,7 +250,7 @@ class ChecklistRunView(tk.Frame):
             side="right", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Save & raise issue", self._save_and_raise).pack(
+        _big_button(footer, "Save & raise issues", self._save_and_raise).pack(
             side="left", padx=theme.PAD, pady=theme.PAD)
 
     def _items_json(self) -> str:
@@ -195,14 +275,24 @@ class ChecklistRunView(tk.Frame):
 
     def _save(self):
         self._write_run()
-        session = self.app.d.open_session()
-        self.app.show_session(session) if session is not None else self.app.show_checklists()
+        self._after_save()
 
     def _save_and_raise(self):
+        # Every filled note becomes an issue linked to the run — the note IS the
+        # issue, typed once (first-pass feedback §1). A benign checklist uses plain
+        # Save instead, which raises nothing.
         run_id = self._write_run()
-        # The issue links back to the run just saved; default kind 'issue' (a
-        # checklist usually surfaces a defect), changeable in the form (§14.6).
-        self.app.show_task_form("issue", checklist_run_id=run_id)
+        for r in self.rows:
+            note = r.note_text()
+            if note:
+                raise_task_issue(self.app, kind="issue", source="checklist",
+                                 description=f"{r.title()}: {note}",
+                                 checklist_run_id=run_id)
+        self._after_save()
+
+    def _after_save(self):
+        session = self.app.d.open_session()
+        self.app.show_session(session) if session is not None else self.app.show_checklists()
 
     def _cancel(self):
         self.app.show_checklists()

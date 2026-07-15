@@ -9,6 +9,7 @@ session split.
 Build order: step 4. Run: ``python -m unittest discover -s tests -t .``
 """
 
+import json
 import tempfile
 import tkinter as tk
 import unittest
@@ -50,6 +51,16 @@ class ChecklistUITestCase(unittest.TestCase):
         self.assertEqual(launch._checklists_btn.cget("text"), "Checklists")
         self.assertIn("Tasks", launch._tasks_btn.cget("text"))
 
+    def test_launch_title_carries_the_vessel_name(self):
+        try:
+            app = App(self.d, start_reader=False, vessel_name="Kingfisher")
+        except tk.TclError as exc:
+            self.skipTest(f"no Tk display: {exc}")
+        self.addCleanup(app.root.destroy)
+        app.root.withdraw()
+        self.assertIn("Simple Yacht Log", app.views.current._title.cget("text"))
+        self.assertIn("Kingfisher", app.views.current._title.cget("text"))
+
     def test_picker_lists_configured_checklists(self):
         from logbook.ui.checklists import ChecklistPickerView, ChecklistRunView
         self.app.show_checklists()
@@ -82,25 +93,37 @@ class ChecklistUITestCase(unittest.TestCase):
         self.assertEqual(events[0]["checklist_run_id"], run["id"])   # cross-linked
         self.assertIn("2/2", events[0]["remarks"])                   # the summary
 
-    def test_save_and_raise_issue_links_to_the_run(self):
+    def test_save_and_raise_turns_notes_into_linked_issues(self):
+        # A note typed against an item becomes a linked issue on Save & raise —
+        # no re-typing (first-pass feedback §1). And it returns to the log, not a
+        # further form.
+        from logbook.ui.app import SessionView
         session = self._open_session()
         self.app.show_session(session)
         self.app.show_checklist_form(CHECKLISTS[0])
-        self.app.views.current._save_and_raise()
+        rv = self.app.views.current
+        rv.rows[0].checked.set(True)
+        rv.rows[1]._note.insert("1.0", "belt worn")     # the note IS the issue
+        rv._save_and_raise()
 
-        from logbook.ui.tasks import TaskIssueFormView
-        form = self.app.views.current
-        self.assertIsInstance(form, TaskIssueFormView)
+        self.assertIsInstance(self.app.views.current, SessionView)   # returns, no form
         run = self.d.checklist_runs(session["id"])[0]
-        self.assertEqual(form.checklist_run_id, run["id"])
-
-        form.desc.insert("1.0", "Oil low, top up before next passage")
-        form._save()
         issues = self.d.task_issues()
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0]["source"], "checklist")
         self.assertEqual(issues[0]["checklist_run_id"], run["id"])
+        self.assertIn("belt worn", issues[0]["description"])          # note carried through
+        self.assertIn("Oil", issues[0]["description"])                # prefixed by item title
         self.assertEqual(len(self._events(session["id"], "issue_raised")), 1)
+
+    def test_plain_save_keeps_notes_but_raises_no_issues(self):
+        self.app.show_checklist_form(CHECKLISTS[0])
+        rv = self.app.views.current
+        rv.rows[1]._note.insert("1.0", "topped up 0.3L")   # a benign reading, not an issue
+        rv._save()
+        self.assertEqual(self.d.task_issues(), [])          # Save raises nothing
+        items = json.loads(self.d.checklist_runs()[0]["items_json"])
+        self.assertEqual(items[1]["note"], "topped up 0.3L")  # but the note is kept
 
     def test_history_and_detail_roundtrip_edits_remarks(self):
         from logbook.ui.checklists import ChecklistHistoryView, ChecklistRunDetailView

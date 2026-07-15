@@ -36,6 +36,10 @@
       ]
     }
   ],
+  "locations": [
+    "Home berth",
+    "Fuel pontoon"
+  ],
   "logging": {
     "autolog_interval_min": 30,
     "distance_sample_sec": 30,

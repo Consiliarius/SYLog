@@ -173,13 +173,21 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
 
 # -- checklists and Tasks & Issues (§14) --------------------------------------
 
-def _short_label(label: str) -> str:
-    """The head of an item label — the words before a dash separator — for compact
-    display: 'Water — raw-water seacock…' -> 'Water'."""
+def split_label(label: str) -> tuple[str, str]:
+    """Split an item label into (title, descriptor) at the first dash separator:
+    'Water — raw-water seacock…' -> ('Water', 'raw-water seacock…'). No separator
+    -> (label, ''). The checklist form shows the title bold and the descriptor
+    italic beneath; the log summary uses the title alone."""
     for sep in ("—", "–", " - "):
         if sep in label:
-            return label.split(sep)[0].strip()
-    return label.strip()
+            head, tail = label.split(sep, 1)
+            return head.strip(), tail.strip()
+    return label.strip(), ""
+
+
+def _short_label(label: str) -> str:
+    """The title half of an item label, for compact display."""
+    return split_label(label)[0]
 
 
 def checklist_summary(title: str, items_json: str | None) -> str:
