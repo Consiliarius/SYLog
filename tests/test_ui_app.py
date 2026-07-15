@@ -233,6 +233,27 @@ class AppShellTestCase(unittest.TestCase):
         self._put_fix(now + timedelta(seconds=1))
         self.assertIsNone(self.app.clock_warning)
 
+    def test_clock_warning_self_clears_when_the_clock_corrects(self):
+        # The netbook resumes from standby with the clock hours out, then chrony
+        # corrects it. GPS time keeps advancing throughout; only the system clock
+        # (the injected `now`) moves. The warning must not latch (the reported bug).
+        def fix(t):
+            return gps.Fix(time=t, mode=3, lat=50.0, lon=0.0, sog_kn=5.0, cog_deg=90.0)
+        t0 = datetime(2026, 7, 15, 12, 0, 0, tzinfo=UTC)
+
+        self.app._check_clock(fix(t0), now=t0)                            # anchor, in sync
+        self.assertIsNone(self.app.clock_warning)
+
+        t1 = t0 + timedelta(minutes=30)                                   # GPS advanced...
+        self.app._check_clock(fix(t1), now=t1 - timedelta(seconds=8129))  # ...clock 8129s behind
+        self.assertIsNotNone(self.app.clock_warning)
+        self.assertIn("8129", self.app._clock_label.cget("text"))
+
+        t2 = t1 + timedelta(minutes=1)
+        self.app._check_clock(fix(t2), now=t2 - timedelta(seconds=2))     # clock corrected
+        self.assertIsNone(self.app.clock_warning)                         # self-cleared...
+        self.assertEqual(self.app._clock_label.cget("text"), "")          # ...bar is clear again
+
     def test_two_open_runs_disable_engine_button(self):
         with self.d.conn:
             self.d.conn.execute(

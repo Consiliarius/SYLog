@@ -267,33 +267,42 @@ class App:
         text, ok = self._backup_status
         self._backup_label.configure(text=text, fg=theme.FG_MUTED if ok else theme.BAD)
 
-    def _check_clock(self, fix) -> None:
-        """Warn ONCE if the system clock disagrees with GPS time (§3.4).
+    def _check_clock(self, fix, *, now: datetime | None = None) -> None:
+        """Track the system-clock vs GPS-time offset live, and SELF-CLEAR (§3.4).
 
-        The tool never silently corrects a stored timestamp — it tells the
-        skipper and leaves the data as observed. The clock is the system's job
-        (chrony + the gpsd SHM refclock), not the application's.
+        Recomputed on every advancing fix. A clock that is briefly wrong — after
+        a resume from standby, say, where it can be hours out until chrony
+        re-syncs — and then corrects itself must NOT leave a stale warning
+        latched: the indicator reflects the CURRENT offset and disappears once
+        the clock is back within tolerance. (The old code returned early while a
+        warning stood, so it never re-checked and the warning stuck until
+        restart.)
 
         Only an ADVANCING fix time is evidence about the clock. A receiver that
-        has latched resends the same timestamp forever, which would otherwise
-        look exactly like a clock drifting away — that is staleness, and the GPS
+        has latched resends one timestamp forever, which would otherwise look
+        exactly like a clock drifting away — that is staleness, and the GPS
         indicator already says so.
+
+        The tool never corrects a stored timestamp: it reports, and the data
+        stays as observed. Disciplining the clock is the system's job (chrony +
+        the gpsd SHM refclock), not the application's.
         """
-        if self.clock_warning is not None or fix.time is None:
+        if fix.time is None:
             return
         advancing = self._last_fix_time is not None and fix.time > self._last_fix_time
         self._last_fix_time = fix.time
         if not advancing:
             return
-        offset = (fix.time - datetime.now(timezone.utc)).total_seconds()
-        if abs(offset) <= self.clock_offset_warn_sec:
-            return
-        self.clock_warning = (
-            f"System clock differs from GPS by {offset:+.0f} s. Timestamps are recorded "
-            f"as observed and are NOT auto-corrected — discipline the clock "
-            f"(chrony + gpsd SHM refclock).")
-        self._clock_label.configure(text=f"clock {offset:+.0f}s")
-        self.startup_warnings = [*self.startup_warnings, self.clock_warning]
+        offset = (fix.time - (now or datetime.now(timezone.utc))).total_seconds()
+        if abs(offset) > self.clock_offset_warn_sec:
+            self.clock_warning = (
+                f"System clock differs from GPS by {offset:+.0f} s. Timestamps are recorded "
+                f"as observed and are NOT auto-corrected — discipline the clock "
+                f"(chrony + gpsd SHM refclock).")
+            self._clock_label.configure(text=f"clock {offset:+.0f}s", fg=theme.BAD)
+        elif self.clock_warning is not None:
+            self.clock_warning = None          # the clock is back within tolerance
+            self._clock_label.configure(text="")
 
     # -- views ----------------------------------------------------------------
 
@@ -669,7 +678,13 @@ class LaunchView(tk.Frame):
                 fg=theme.BAD)
         else:
             self._engine_btn.configure(text="Engine ▶", state="normal")
-            self._banner.configure(text="  ".join(self.app.startup_warnings), fg=theme.WARN)
+            # The clock warning is read LIVE here, not carried in the sticky
+            # startup_warnings list, so a corrected clock drops it from the
+            # banner on the next tick as well as from the status bar.
+            notes = list(self.app.startup_warnings)
+            if self.app.clock_warning:
+                notes.insert(0, self.app.clock_warning)
+            self._banner.configure(text="  ".join(notes), fg=theme.WARN)
 
     # -- actions --
 
