@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> None:
 
     tuning = dict(
         sails=cfg.sails,
+        checklists=cfg.checklists,
         backdate_tolerance_sec=cfg.backdate_tolerance_sec,
         autolog_interval_min=cfg.autolog_interval_min,
         distance_sample_sec=cfg.distance_sample_sec,

@@ -834,8 +834,15 @@ class EngineFormView(tk.Frame):
                 text="remarks are required — an issue with no description is nothing",
                 fg=theme.BAD)
             return
-        write_event(self.app, self.session, when=datetime.now(timezone.utc),
-                    event_kind="engine_issue", remarks=text)
+        # Unified: the engine Issue also becomes a first-class task_issue row so it
+        # lands on the Tasks & Issues worklist (§14.6). The log keeps its single
+        # ENGINE line, cross-linked to that row — not a second ISSUE line.
+        now = datetime.now(timezone.utc)
+        ti_id = self.app.d.insert_task_issue(
+            kind="issue", source="engine", description=text,
+            raised_utc=db.to_iso_utc(now), session_id=self.session["id"])
+        write_event(self.app, self.session, when=now, event_kind="engine_issue",
+                    remarks=text, task_issue_id=ti_id)
         self.app.show_session(self.session)
 
 

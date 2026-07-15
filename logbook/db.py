@@ -39,7 +39,8 @@ _ENTRY_COLUMNS = (
     "heading_deg", "heading_ref", "log_nm", "sail_state",
     "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
     "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
-    "location_name", "engine_run_id", "radio_channel", "radio_station", "remarks",
+    "location_name", "engine_run_id", "checklist_run_id", "task_issue_id",
+    "radio_channel", "radio_station", "remarks",
 )
 _ENTRY_REQUIRED = (
     "session_id", "timestamp_utc", "time_source", "recorded_utc",

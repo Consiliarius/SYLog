@@ -93,6 +93,7 @@ class App:
         port: int = gps.DEFAULT_PORT,
         startup_warnings: list[str] | None = None,
         sails: list[dict] | None = None,
+        checklists: list[dict] | None = None,
         backdate_tolerance_sec: float = 60.0,
         autolog_interval_min: float = 30.0,
         distance_sample_sec: float = 30.0,
@@ -107,6 +108,7 @@ class App:
     ) -> None:
         self.d = d
         self.sails = sails
+        self.checklists = checklists or []
         self.db_path = db_path
         self.backup_dir = backup_dir
         self.backup_retention = backup_retention
@@ -388,6 +390,41 @@ class App:
         self._show(lambda: viewer.ViewerEntryEditView(
             self._content, self, session_row, entry_row))
 
+    # -- checklists and Tasks & Issues (§14) ----------------------------------
+
+    def show_checklists(self, event=None) -> None:
+        from logbook.ui import checklists
+        self._show(lambda: checklists.ChecklistPickerView(self._content, self))
+
+    def show_checklist_form(self, checklist_def) -> None:
+        from logbook.ui import checklists
+        self._show(lambda: checklists.ChecklistRunView(self._content, self, checklist_def))
+
+    def show_checklist_history(self) -> None:
+        from logbook.ui import checklists
+        self._show(lambda: checklists.ChecklistHistoryView(self._content, self))
+
+    def show_checklist_run(self, run_row) -> None:
+        from logbook.ui import checklists
+        self._show(lambda: checklists.ChecklistRunDetailView(self._content, self, run_row))
+
+    def show_tasks(self, event=None) -> None:
+        from logbook.ui import tasks
+        self._show(lambda: tasks.TasksIssuesView(self._content, self))
+
+    def show_task_form(self, kind, *, checklist_run_id=None) -> None:
+        from logbook.ui import tasks
+        self._show(lambda: tasks.TaskIssueFormView(
+            self._content, self, kind=kind, checklist_run_id=checklist_run_id))
+
+    def show_task_edit(self, ti_row) -> None:
+        from logbook.ui import tasks
+        self._show(lambda: tasks.TaskIssueFormView(self._content, self, existing=ti_row))
+
+    def show_task_done(self, ti_row) -> None:
+        from logbook.ui import tasks
+        self._show(lambda: tasks.TaskIssueDoneView(self._content, self, ti_row))
+
     # -- export + backup on session close (§3.6, §6.2) -------------------------
 
     def export_and_backup(self, session_id) -> list[str]:
@@ -663,6 +700,49 @@ def write_autolog_entry(app, session) -> int:
     return app.d.insert_entry(**fields)
 
 
+def write_checklist_complete_event(app, session, run_id, summary, *, when=None):
+    """Surface a completed checklist in the session log (§14.5). The checklist_run
+    is the record; this event row is the log's note of it, linked by id."""
+    when = when or datetime.now(timezone.utc)
+    return write_event(app, session, when=when, event_kind="checklist_complete",
+                       remarks=summary, checklist_run_id=run_id)
+
+
+def raise_task_issue(app, *, kind, description, source, checklist_run_id=None,
+                     engine_run_id=None, when=None):
+    """Add a task or issue (§14.6) and, if a session is open, note it in the log.
+
+    The task_issue row is the source of truth; the log event is a secondary,
+    timestamped note. Raised ashore (no session) -> only the row is written.
+    Returns the new task_issue id.
+    """
+    when = when or datetime.now(timezone.utc)
+    session = app.d.open_session()
+    ti_id = app.d.insert_task_issue(
+        kind=kind, source=source, description=description,
+        raised_utc=db.to_iso_utc(when),
+        session_id=session["id"] if session is not None else None,
+        checklist_run_id=checklist_run_id, engine_run_id=engine_run_id)
+    if session is not None:
+        write_event(app, session, when=when,
+                    event_kind="task_raised" if kind == "task" else "issue_raised",
+                    remarks=description, task_issue_id=ti_id)
+    return ti_id
+
+
+def complete_task_issue(app, ti_row, *, done_note=None, when=None):
+    """Mark a task/issue done (§14.6); note a 'done' line if a session is open.
+    The list stays authoritative — the log line is only a record that it happened."""
+    when = when or datetime.now(timezone.utc)
+    app.d.mark_task_issue_done(ti_row["id"], done_utc=db.to_iso_utc(when),
+                               done_note=done_note)
+    session = app.d.open_session()
+    if session is not None:
+        write_event(app, session, when=when,
+                    event_kind="task_done" if ti_row["kind"] == "task" else "issue_closed",
+                    remarks=ti_row["description"], task_issue_id=ti_row["id"])
+
+
 class LaunchView(tk.Frame):
     def __init__(self, parent, app: App) -> None:
         super().__init__(parent, bg=theme.BG)
@@ -672,15 +752,21 @@ class LaunchView(tk.Frame):
 
     def _build(self) -> None:
         # Engine hours moved to the always-visible status bar; the launch view is
-        # now the action buttons and the two status lines.
-        row = tk.Frame(self, bg=theme.BG)
-        row.pack(pady=(theme.PAD * 6, theme.PAD * 2))
-        self._start_btn = _big_button(row, "Start Session", self._start_session, width=12)
-        self._start_btn.pack(side="left", padx=theme.PAD)
-        self._log_btn = _big_button(row, "View Log", self._view_log, width=12)
-        self._log_btn.pack(side="left", padx=theme.PAD)
-        self._engine_btn = _big_button(row, "Engine ▶", self._toggle_engine, width=12)
-        self._engine_btn.pack(side="left", padx=theme.PAD)
+        # now the action buttons (a 2×3 grid — five entry points fit without
+        # shrinking the touch targets, §14.9) and the two status lines.
+        grid = tk.Frame(self, bg=theme.BG)
+        grid.pack(pady=(theme.PAD * 5, theme.PAD * 2))
+        self._start_btn = _big_button(grid, "Start Session", self._start_session, width=14)
+        self._start_btn.grid(row=0, column=0, padx=theme.PAD, pady=theme.PAD)
+        self._log_btn = _big_button(grid, "View Log", self._view_log, width=14)
+        self._log_btn.grid(row=0, column=1, padx=theme.PAD, pady=theme.PAD)
+        self._engine_btn = _big_button(grid, "Engine ▶", self._toggle_engine, width=14)
+        self._engine_btn.grid(row=0, column=2, padx=theme.PAD, pady=theme.PAD)
+        self._checklists_btn = _big_button(grid, "Checklists", self._checklists, width=14)
+        self._checklists_btn.grid(row=1, column=0, padx=theme.PAD, pady=theme.PAD)
+        self._tasks_btn = _big_button(grid, "Tasks & Issues", self._tasks, width=14)
+        self._tasks_btn.grid(row=1, column=1, padx=theme.PAD, pady=theme.PAD)
+        # row 1, column 2 is left spare — headroom for a future entry point.
 
         # Two separate lines with two different owners, deliberately not one:
         #   _banner  — periodic STATUS, rewritten by refresh() on every 250 ms
@@ -767,6 +853,12 @@ class LaunchView(tk.Frame):
     def _view_log(self) -> None:
         self.app.show_viewer()
 
+    def _checklists(self) -> None:
+        self.app.show_checklists()
+
+    def _tasks(self) -> None:
+        self.app.show_tasks()
+
 
 class PlaceholderView(tk.Frame):
     """A stand-in for views not yet built, with a way back to Launch."""
@@ -813,6 +905,9 @@ class SessionView(tk.Frame):
             _big_button(bar2, label,
                         lambda f=factory: self.app.show_form(f, self.session)).pack(
                 side="left", padx=2, pady=(0, theme.PAD))
+        # A checklist can be worked mid-session; its completion lands in this log.
+        _big_button(bar2, "Checklist", self.app.show_checklists).pack(
+            side="left", padx=2, pady=(0, theme.PAD))
 
         self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=self.app.font_small,
                                 wraplength=theme.DEFAULT_W - 40, justify="left", anchor="w")
