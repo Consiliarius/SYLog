@@ -112,6 +112,60 @@ class RenderTestCase(unittest.TestCase):
         self.assertIn("AUTO", line)
         self.assertIn("5.0kn", line)
 
+    # -- checklists and Tasks & Issues (§14) ----------------------------------
+
+    def test_checklist_summary_all_ticked(self):
+        items = ('[{"label":"Isolator — on","checked":1},'
+                 '{"label":"Oil — dipstick","checked":1,"note":"low"}]')
+        summary = render.checklist_summary("I-WOBBLE — engine start", items)
+        self.assertEqual(summary, "I-WOBBLE — engine start · 2/2")
+
+    def test_checklist_summary_names_unticked_by_short_label(self):
+        items = ('[{"label":"Heads — emptied","checked":1},'
+                 '{"label":"Gas — bottle off","checked":0},'
+                 '{"label":"Fenders and lines — secure","checked":0}]')
+        summary = render.checklist_summary("Close-up", items)
+        self.assertIn("1/3", summary)
+        self.assertIn("Gas", summary)
+        self.assertIn("Fenders and lines", summary)   # short label before the dash
+        self.assertIn("not ticked", summary)
+
+    def test_checklist_complete_line_shows_summary_from_remarks(self):
+        # The event row carries the composed summary in remarks; the renderer
+        # tags it CHECK and shows it, with no generic verb.
+        line = self.line(category="event", entry_type="event",
+                         event_kind="checklist_complete",
+                         remarks="I-WOBBLE — engine start · 7/7")
+        self.assertIn("CHECK", line)
+        self.assertIn("I-WOBBLE — engine start · 7/7", line)
+
+    def test_task_and_issue_event_lines(self):
+        raised = self.line(category="event", entry_type="event",
+                           event_kind="issue_raised", remarks="Oil down to min")
+        self.assertIn("ISSUE", raised)
+        self.assertIn("Raised", raised)
+        self.assertIn("Oil down to min", raised)
+
+        done = self.line(category="event", entry_type="event",
+                         event_kind="task_done", remarks="Order new anode")
+        self.assertIn("TASK", done)
+        self.assertIn("Completed", done)
+
+    def test_task_issue_line_open_and_done(self):
+        i = self.d.insert_task_issue(kind="issue", source="manual",
+                                     description="Bilge float sticky",
+                                     raised_utc="2026-07-13T11:00:00Z")
+        open_line = render.task_issue_line(self.d.task_issue(i), tz=timezone.utc)
+        self.assertTrue(open_line.startswith("ISSUE"))
+        self.assertIn("Bilge float sticky", open_line)
+        self.assertIn("open", open_line)
+
+        self.d.mark_task_issue_done(i, done_utc="2026-07-14T09:00:00Z",
+                                    done_note="cleaned it")
+        done_line = render.task_issue_line(self.d.task_issue(i), tz=timezone.utc)
+        self.assertIn("done", done_line)
+        self.assertIn("cleaned it", done_line)
+
 
 if __name__ == "__main__":
     unittest.main()

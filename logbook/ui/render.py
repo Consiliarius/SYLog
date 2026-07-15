@@ -28,6 +28,11 @@ _TAG_BY_EVENT = {
     "engine_on": "ENGINE", "engine_off": "ENGINE",
     "engine_duration": "ENGINE", "engine_issue": "ENGINE",
     "session_open": "LOG", "autolog_on": "AUTO", "autolog_off": "AUTO",
+    # Checklists and Tasks & Issues (§14): the tag is split by kind so the log
+    # line reads TASK vs ISSUE from the row alone, never a join to task_issue.
+    "checklist_complete": "CHECK",
+    "task_raised": "TASK", "task_done": "TASK",
+    "issue_raised": "ISSUE", "issue_closed": "ISSUE",
 }
 _TAG_BY_CATEGORY = {
     "auto": "AUTO", "observation": "OBS", "sail": "SAIL",
@@ -41,6 +46,10 @@ _EVENT_TEXT = {
     "engine_duration": "Run logged", "engine_issue": "Issue",
     "session_open": "Log opened",
     "autolog_on": "Auto-log started", "autolog_off": "Auto-log stopped",
+    # Tasks & Issues: the verb by kind + action. checklist_complete has no verb —
+    # its remarks already carry the checklist_summary (title + count).
+    "task_raised": "Added", "issue_raised": "Raised",
+    "task_done": "Completed", "issue_closed": "Closed",
 }
 
 
@@ -160,3 +169,52 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
 
     summary = " · ".join(parts)
     return f"{time}  {_tag(row):6}  {summary}".rstrip()
+
+
+# -- checklists and Tasks & Issues (§14) --------------------------------------
+
+def _short_label(label: str) -> str:
+    """The head of an item label — the words before a dash separator — for compact
+    display: 'Water — raw-water seacock…' -> 'Water'."""
+    for sep in ("—", "–", " - "):
+        if sep in label:
+            return label.split(sep)[0].strip()
+    return label.strip()
+
+
+def checklist_summary(title: str, items_json: str | None) -> str:
+    """A dense one-line summary of a completed checklist run: the title and the
+    ticked count, naming any items left unticked (§14.5).
+
+    Built from the run's own snapshot, so it reads the same forever without config
+    (§8). Used for the rolling-log line's remarks, the checklist history, and the
+    CSV's legible column — one renderer, so they cannot diverge (§6.1)."""
+    try:
+        items = json.loads(items_json) if items_json else []
+    except (ValueError, TypeError):
+        items = []
+    total = len(items)
+    ticked = sum(1 for it in items if it.get("checked"))
+    summary = f"{title} · {ticked}/{total}"
+    unticked = [_short_label(it.get("label", "")) for it in items if not it.get("checked")]
+    if unticked:
+        summary += f" ({', '.join(unticked)} not ticked)"
+    return summary
+
+
+def task_issue_line(row, *, tz: tzinfo = timezone.utc) -> str:
+    """One readable line for a task or issue in the Tasks & Issues view (§14.6):
+    KIND · description · when raised · open / done. Pure and single-row, so the
+    view, the CSV, and any future page render it identically."""
+    raised = db.parse_iso_utc(row["raised_utc"]).astimezone(tz).strftime("%d %b %H:%M")
+    parts = [row["description"], f"raised {raised}"]
+    if row["status"] == "done":
+        when = (db.parse_iso_utc(row["done_utc"]).astimezone(tz).strftime("%d %b")
+                if row["done_utc"] else "?")
+        state = f"done {when}"
+        if row["done_note"]:
+            state += f": {row['done_note']}"
+    else:
+        state = "open"
+    parts.append(state)
+    return f"{row['kind'].upper():6} {' · '.join(parts)}"
