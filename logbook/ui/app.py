@@ -179,20 +179,35 @@ class App:
         self._content.pack(side="top", fill="both", expand=True)
         self._bar = tk.Frame(self.root, bg=theme.BG_PANEL)
         self._bar.pack(side="bottom", fill="x")
+
+        # LEFT: system date + local time, then the current GPS position.
+        self._where_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
+                                     bg=theme.BG_PANEL, font=self.font_small, anchor="w")
+        self._where_label.pack(side="left", padx=theme.PAD, pady=2)
+
+        # RIGHT (rightmost first): GPS fix, then the clock offset and auto-backup
+        # status (§3.6) — always visible, so a failure is never silent (§10.3),
+        # yet the short-handed skipper is never asked to do anything mid-passage.
         self._gps_label = tk.Label(self._bar, text="GPS offline", fg=theme.BAD,
                                    bg=theme.BG_PANEL, font=self.font_small)
         self._gps_label.pack(side="right", padx=theme.PAD, pady=2)
         self._clock_label = tk.Label(self._bar, text="", fg=theme.BAD,
                                      bg=theme.BG_PANEL, font=self.font_small)
         self._clock_label.pack(side="right", padx=theme.PAD, pady=2)
-        # Automatic-backup status (§3.6): the last snapshot's time, or a loud
-        # FAILED — always visible, so a failure is never silent (§10.3) yet the
-        # short-handed skipper is never asked to do anything mid-passage.
         self._backup_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
                                       bg=theme.BG_PANEL, font=self.font_small)
         self._backup_label.pack(side="right", padx=theme.PAD, pady=2)
+
+        # CENTRE: cumulative engine hours (§6.10) — always visible now, not only
+        # on the launch view — carrying their provenance note (§7) compactly.
+        self._engine_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
+                                      bg=theme.BG_PANEL, font=self.font_small, anchor="center")
+        self._engine_label.pack(side="left", expand=True, fill="x")
+
         self._refresh_gps_indicator()
         self._refresh_backup_indicator()
+        self._refresh_where()
+        self._refresh_engine_label()
 
     # -- fullscreen and theme -------------------------------------------------
 
@@ -222,11 +237,16 @@ class App:
         self.root.configure(bg=theme.BG)
         self._content.configure(bg=theme.BG)
         self._bar.configure(bg=theme.BG_PANEL)
-        self._gps_label.configure(bg=theme.BG_PANEL)
-        self._clock_label.configure(bg=theme.BG_PANEL, fg=theme.BAD)
-        self._backup_label.configure(bg=theme.BG_PANEL)
+        for label in (self._gps_label, self._clock_label, self._backup_label,
+                      self._where_label, self._engine_label):
+            label.configure(bg=theme.BG_PANEL)
+        self._clock_label.configure(fg=theme.BAD)
+        self._where_label.configure(fg=theme.FG_MUTED)
+        self._engine_label.configure(fg=theme.FG_MUTED)
         self._refresh_gps_indicator()
         self._refresh_backup_indicator()
+        self._refresh_where()
+        self._refresh_engine_label()
 
     # -- the GPS tick (thread boundary) ---------------------------------------
 
@@ -250,6 +270,8 @@ class App:
         except queue.Empty:
             pass
         self._refresh_gps_indicator()
+        self._refresh_where()
+        self._refresh_engine_label()
         current = self.views.current
         if isinstance(current, LaunchView):
             current.refresh()
@@ -266,6 +288,23 @@ class App:
             return
         text, ok = self._backup_status
         self._backup_label.configure(text=text, fg=theme.FG_MUTED if ok else theme.BAD)
+
+    def _refresh_where(self) -> None:
+        """Left of the bar: system date (yy-mm-dd) + local time, then the current
+        GPS position when the fix is usable. No fix -> just the date and time; a
+        position is never shown from a stale or absent fix."""
+        parts = [datetime.now().strftime("%y-%m-%d %H:%M")]   # naive local, display only
+        fix = self.gps_state.fix
+        if self.gps_state.classify() in ("FIX", "2D") and fix and fix.has_position:
+            parts.append(render.format_position(fix.lat, fix.lon))
+        self._where_label.configure(text="   ".join(parts))
+
+    def _refresh_engine_label(self) -> None:
+        """Centre of the bar: cumulative engine hours with their §7 provenance."""
+        baseline_h = float(self.d.get_meta("engine_hours_baseline", "0"))
+        note = self.d.get_meta("engine_hours_baseline_note", "none")
+        total_h = engine.cumulative_minutes(self.d, baseline_h * 60.0) / 60.0
+        self._engine_label.configure(text=_engine_label_text(total_h, baseline_h, note))
 
     def _check_clock(self, fix, *, now: datetime | None = None) -> None:
         """Track the system-clock vs GPS-time offset live, and SELF-CLEAR (§3.4).
@@ -544,13 +583,14 @@ def _hm(minutes: float) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
-def _engine_hours_text(total_h: float, baseline_h: float, note: str) -> str:
-    """The provenance-carrying label from §7 — never a bare number."""
+def _engine_label_text(total_h: float, baseline_h: float, note: str) -> str:
+    """The status-bar engine figure — compact, but still carrying its provenance
+    (§7): a bare number invites false confidence, so the note is never dropped."""
     if note == "documented":
-        return f"Engine: {total_h:,.1f} h total (incl. {baseline_h:,.0f} h documented prior)"
+        return f"Engine {total_h:,.1f} h (incl. {baseline_h:,.0f} documented)"
     if note == "estimated":
-        return f"Engine: {total_h:,.1f} h (estimated)"
-    return f"Engine: {total_h:.1f} h recorded"
+        return f"Engine {total_h:,.1f} h (est.)"
+    return f"Engine {total_h:,.1f} h"
 
 
 # -- events -------------------------------------------------------------------
@@ -631,11 +671,10 @@ class LaunchView(tk.Frame):
         self.refresh()
 
     def _build(self) -> None:
-        self._engine_hours = tk.Label(self, bg=theme.BG, fg=theme.FG, font=self.app.font_large)
-        self._engine_hours.pack(pady=(theme.PAD * 4, theme.PAD * 2))
-
+        # Engine hours moved to the always-visible status bar; the launch view is
+        # now the action buttons and the two status lines.
         row = tk.Frame(self, bg=theme.BG)
-        row.pack(pady=theme.PAD * 2)
+        row.pack(pady=(theme.PAD * 6, theme.PAD * 2))
         self._start_btn = _big_button(row, "Start Session", self._start_session, width=12)
         self._start_btn.pack(side="left", padx=theme.PAD)
         self._log_btn = _big_button(row, "View Log", self._view_log, width=12)
@@ -658,10 +697,6 @@ class LaunchView(tk.Frame):
 
     def refresh(self) -> None:
         d = self.app.d
-        baseline_h = float(d.get_meta("engine_hours_baseline", "0"))
-        note = d.get_meta("engine_hours_baseline_note", "none")
-        total_h = engine.cumulative_minutes(d, baseline_h * 60.0) / 60.0
-        self._engine_hours.configure(text=_engine_hours_text(total_h, baseline_h, note))
         self._start_btn.configure(
             text="Resume Session" if d.open_session() is not None else "Start Session")
 

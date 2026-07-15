@@ -169,12 +169,31 @@ class AppShellTestCase(unittest.TestCase):
         self.app._drain_and_refresh()                 # the tick that used to wipe it
         self.assertIn("precede", launch._notice.cget("text"))   # still there
 
-    def test_hours_label_carries_documented_provenance(self):
+    def test_status_bar_engine_hours_carry_provenance(self):
+        # Engine hours live on the status bar now, but §7 still holds: the figure
+        # is never bare — its provenance note travels with it.
         self.d.set_meta("engine_hours_baseline", "1800")
         self.d.set_meta("engine_hours_baseline_note", "documented")
-        launch = self.app.views.current
-        launch.refresh()
-        self.assertIn("documented", launch._engine_hours.cget("text"))
+        self.app._refresh_engine_label()
+        text = self.app._engine_label.cget("text")
+        self.assertIn("documented", text)
+        self.assertIn("1,800", text)
+
+    def test_status_bar_shows_date_and_position(self):
+        self.app.gps_state.on_status("connected")
+        self.app.gps_state.on_fix(a_fix(mode=3, lat=50.85, lon=0.575))
+        self.app._refresh_where()
+        text = self.app._where_label.cget("text")
+        self.assertIn(datetime.now().strftime("%y-%m-%d"), text)   # system date, yy-mm-dd
+        self.assertIn("50°51.0'N", text)                            # deg + decimal minutes
+        self.assertIn("000°34.5'E", text)
+
+    def test_status_bar_position_omitted_without_a_fix(self):
+        self.app.gps_state.on_status("connected")     # connected, but no fix yet
+        self.app._refresh_where()
+        text = self.app._where_label.cget("text")
+        self.assertIn(datetime.now().strftime("%y-%m-%d"), text)
+        self.assertNotIn("'N", text)                  # no position fabricated
 
     # -- theme (light for daylight, dark for night) ----------------------------
 
