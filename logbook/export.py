@@ -30,7 +30,7 @@ import tempfile
 from datetime import timezone, tzinfo
 from pathlib import Path
 
-from logbook import db
+from logbook import db, passage
 from logbook.ui.render import format_position  # pure formatter; imports no Tk
 
 ENTRY_COLUMNS = (
@@ -59,6 +59,10 @@ SESSION_COLUMNS = (
     "departed_from", "bound_for", "skipper", "crew", "variation_deg",
     "log_start_nm", "log_end_nm", "distance_og_nm", "notes",
 )
+# The derived time split (§5.6) is written into the summary so the archival
+# record carries it directly, rather than leaving it to be reconstructed from
+# the event pairs in the entries file — the same reasoning as engine-cumulative.
+SUMMARY_COLUMNS = SESSION_COLUMNS + ("time_under_way_min", "time_stationary_min")
 
 CUMULATIVE_COLUMNS = ENGINE_COLUMNS + ("engine_hours_baseline", "engine_hours_baseline_note")
 
@@ -144,8 +148,17 @@ def export_session(d, session_id, out_dir, *, sails=None,
         _write_csv(out_dir / f"{tag}-engine.csv", ENGINE_COLUMNS,
                    ({col: r[col] for col in ENGINE_COLUMNS}
                     for r in d.engine_runs_including_deleted(session_id))),
-        _write_csv(out_dir / f"{tag}-summary.csv", SESSION_COLUMNS,
-                   [{col: session[col] for col in SESSION_COLUMNS}] if session else []),
+        _write_csv(out_dir / f"{tag}-summary.csv", SUMMARY_COLUMNS,
+                   [_summary_row(d, session)] if session else []),
         export_engine_cumulative(d, out_dir),
     ]
     return written
+
+
+def _summary_row(d, session) -> dict:
+    """Session metadata plus the derived time split (§5.6), rounded to minutes."""
+    row = {col: session[col] for col in SESSION_COLUMNS}
+    split = passage.time_split(d.passage_events(session["id"]), session)
+    row["time_under_way_min"] = round(split.under_way_min, 1)
+    row["time_stationary_min"] = round(split.stationary_min, 1)
+    return row

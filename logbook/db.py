@@ -385,6 +385,17 @@ class Database:
             "AND event_kind IN ('departure', 'arrival') ORDER BY id DESC LIMIT 1",
             (session_id,)).fetchone()
 
+    def passage_events(self, session_id) -> list[sqlite3.Row]:
+        """A session's departure/arrival events in id order (§3.4), non-deleted.
+
+        The inputs to the time under way / time stationary split (§5.6). Deleted
+        events are excluded here so a soft-deleted mistake cannot skew the
+        figure (invariant 7)."""
+        return self.conn.execute(
+            "SELECT * FROM entry WHERE session_id = ? AND deleted = 0 "
+            "AND event_kind IN ('departure', 'arrival') ORDER BY id",
+            (session_id,)).fetchall()
+
     def location_names(self, limit=20) -> list[str]:
         """Recent distinct place names, for the departure/arrival autocomplete."""
         rows = self.conn.execute(

@@ -143,6 +143,24 @@ class ExportTestCase(unittest.TestCase):
         self.assertEqual(row["bound_for"], "Boulogne")
         self.assertIn("autolog_active", row)          # the new column, per §8
 
+    def test_summary_carries_the_derived_time_split(self):
+        # §5.6 under way / stationary written into the archival record, not left
+        # to be reconstructed from the event pairs.
+        base = dict(session_id=self.sid, time_source="system",
+                    entry_type="event", category="event", position_source="none")
+        self.d.insert_entry(**base, event_kind="departure",
+                            timestamp_utc="2026-07-13T09:30:00Z",
+                            recorded_utc="2026-07-13T09:30:00Z")
+        self.d.insert_entry(**base, event_kind="arrival",
+                            timestamp_utc="2026-07-13T12:00:00Z",
+                            recorded_utc="2026-07-13T12:00:00Z")
+        self.d.close_session(self.sid, closed_utc="2026-07-13T13:00:00Z")
+
+        self._export()
+        row = read_csv(self.out / "session-001-summary.csv")[0]
+        self.assertEqual(float(row["time_under_way_min"]), 150.0)    # 09:30 -> 12:00
+        self.assertEqual(float(row["time_stationary_min"]), 90.0)    # 240 − 150
+
     # -- atomicity / re-export --------------------------------------------------
 
     def test_re_export_overwrites_and_leaves_no_temp_files(self):

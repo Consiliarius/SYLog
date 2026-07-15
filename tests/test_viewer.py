@@ -62,6 +62,27 @@ class ViewerTestCase(unittest.TestCase):
         view = self._entries_view()
         self.assertIn("VHF 16", view.line(view.rows[0]))
 
+    def test_detail_header_shows_the_time_split(self):
+        # §5.6 under way / stationary on the session-detail header, the sibling
+        # of the DOG figure the session label already carries.
+        ev = dict(session_id=self.sid, time_source="system", entry_type="event",
+                  category="event", position_source="none")
+        self.d.insert_entry(**ev, event_kind="departure",
+                            timestamp_utc="2026-07-13T09:30:00Z",
+                            recorded_utc="2026-07-13T09:30:00Z")
+        self.d.insert_entry(**ev, event_kind="arrival",
+                            timestamp_utc="2026-07-13T12:00:00Z",
+                            recorded_utc="2026-07-13T12:00:00Z")
+        self.d.close_session(self.sid, closed_utc="2026-07-13T13:00:00Z")
+        self.session = self.d.session(self.sid)          # fresh row, as the list supplies
+
+        view = self._entries_view()
+        labels = [w.cget("text") for w in view.winfo_children()
+                  if isinstance(w, tk.Label)]
+        summary = next(t for t in labels if "under way" in t)
+        self.assertIn("under way 2h 30m", summary)
+        self.assertIn("stationary 1h 30m", summary)
+
     # -- corrections, not erasures ---------------------------------------------
 
     def test_edit_marks_the_row_edited(self):

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
-from logbook import db
+from logbook import db, passage
 from logbook.ui import render, theme
 from logbook.ui.app import _big_button
 
@@ -136,6 +136,13 @@ class ViewerEntriesView(tk.Frame):
                        selectcolor=theme.BG_PANEL, activebackground=theme.BG,
                        activeforeground=theme.FG, font=app.font_small,
                        highlightthickness=0).pack(side="right")
+
+        # Time under way / stationary (§5.6) — the sibling of the DOG figure the
+        # session label already carries. Derived from the passage events, honest
+        # about an open passage (§10.3).
+        split = passage.time_split(app.d.passage_events(session["id"]), session)
+        tk.Label(self, text=render.passage_summary(split), bg=theme.BG,
+                 fg=theme.FG_MUTED, font=app.font_small).pack(anchor="w", padx=theme.PAD)
 
         self.listbox = _listbox(app, self)
         self.listbox.pack(fill="both", expand=True, padx=theme.PAD)

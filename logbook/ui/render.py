@@ -49,6 +49,22 @@ def compass(deg: float) -> str:
     return _COMPASS[round(deg / 22.5) % 16]
 
 
+def format_hm(minutes: float) -> str:
+    """A DURATION as '4h 20m' (minutes rounded). Distinct from the engine
+    button's HH:MM, which reads as a clock time — a passage summary is a span."""
+    total = int(round(minutes))
+    return f"{total // 60}h {total % 60:02d}m"
+
+
+def passage_summary(split) -> str:
+    """One line: time under way and time stationary (§5.6). An open passage is
+    annotated, never presented as a settled figure (§10.3)."""
+    under_way = f"under way {format_hm(split.under_way_min)}"
+    if split.passage_open:
+        under_way += " (no arrival logged)"
+    return f"{under_way} · stationary {format_hm(split.stationary_min)}"
+
+
 def format_position(lat: float, lon: float) -> str:
     """Degrees-and-minutes for display (the stored value is decimal degrees)."""
     return f"{_dm(lat, 'NS', 2)} {_dm(lon, 'EW', 3)}"

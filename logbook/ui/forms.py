@@ -25,7 +25,7 @@ import json
 import tkinter as tk
 from datetime import datetime, timedelta, timezone
 
-from logbook import db, engine
+from logbook import db, engine, passage
 from logbook.ui import render, theme
 from logbook.ui.app import _big_button, passage_next_kind, write_event
 
@@ -1022,6 +1022,12 @@ class EndSessionView(tk.Frame):
 
         tk.Label(self, text="End session", bg=theme.BG, fg=theme.FG,
                  font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
+
+        # A pre-close snapshot of the passage split (§5.6). The session is still
+        # open here, so it reads to now; logging an arrival below will change it.
+        split = passage.time_split(d.passage_events(session["id"]), session)
+        tk.Label(self, text=render.passage_summary(split), bg=theme.BG,
+                 fg=theme.FG_MUTED, font=app.font_small).pack(anchor="w", padx=theme.PAD)
 
         body = tk.Frame(self, bg=theme.BG)
         body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
