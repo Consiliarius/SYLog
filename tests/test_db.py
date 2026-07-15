@@ -27,13 +27,19 @@ class DbTestCase(unittest.TestCase):
         self.addCleanup(d.close)
         return d
 
-    def test_fresh_db_creates_schema_v1(self):
+    def test_fresh_db_creates_schema_v2(self):
         d = self.open()
-        self.assertEqual(db.SCHEMA_VERSION, 1)
-        self.assertEqual(d.schema_version(), 1)
+        self.assertEqual(db.SCHEMA_VERSION, 2)
+        self.assertEqual(d.schema_version(), 2)
         names = {r["name"] for r in d.conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertLessEqual({"meta", "session", "engine_run", "entry"}, names)
+        self.assertLessEqual(
+            {"meta", "session", "engine_run", "entry", "checklist_run", "task_issue"},
+            names)
+        # the two additive entry columns (§14.3)
+        entry_cols = {r["name"] for r in d.conn.execute("PRAGMA table_info(entry)")}
+        self.assertIn("checklist_run_id", entry_cols)
+        self.assertIn("task_issue_id", entry_cols)
 
     def test_pragmas_applied(self):
         d = self.open()
@@ -42,9 +48,9 @@ class DbTestCase(unittest.TestCase):
             d.conn.execute("PRAGMA journal_mode").fetchone()[0].lower(), "delete")
 
     def test_existing_current_db_reopens(self):
-        self.open().close()          # create at version 1
+        self.open().close()          # create at the current version
         d = self.open()              # reopen: no create, no migrate, no refuse
-        self.assertEqual(d.schema_version(), 1)
+        self.assertEqual(d.schema_version(), db.SCHEMA_VERSION)
 
     def test_refuse_to_open_newer_schema(self):
         d = self.open()
@@ -155,6 +161,92 @@ class DbTestCase(unittest.TestCase):
         with d.conn:
             d.conn.execute("UPDATE entry SET deleted = 1 WHERE id = ?", (rid,))
         self.assertEqual(d.session_entries(sid), [])
+
+
+class MigrationTestCase(unittest.TestCase):
+    """The first real schema migration, v1 -> v2 (§9, §14.8).
+
+    Additive only: two new tables and two nullable ``entry`` columns. The tests
+    pin the properties that matter — a fresh database and a migrated one end up
+    identical, existing data survives, and a verified backup is taken first.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.path = self.dir / "logbook.db"
+        self.addCleanup(self._tmp.cleanup)
+
+    def _make_v1_db(self):
+        """Write a database frozen at the v1 base schema, as an old build left it."""
+        conn = db.connect(self.path)
+        conn.executescript(db._SCHEMA_V1)
+        conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def _schema_snapshot(conn):
+        tables = sorted(r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"))
+        info = {t: [tuple(r) for r in conn.execute(f"PRAGMA table_info({t})")]
+                for t in tables}
+        return tables, info
+
+    def test_v1_db_migrates_to_v2(self):
+        self._make_v1_db()
+        d = db.open_db(self.path)
+        self.addCleanup(d.close)
+        self.assertEqual(d.schema_version(), 2)
+
+    def test_migrated_schema_matches_fresh(self):
+        # "migrated to v2" and "created at v2" must be the same database (§14.8).
+        self._make_v1_db()
+        migrated = db.open_db(self.path)
+        self.addCleanup(migrated.close)
+        fresh = db.open_db(self.dir / "fresh.db")
+        self.addCleanup(fresh.close)
+        self.assertEqual(self._schema_snapshot(migrated.conn),
+                         self._schema_snapshot(fresh.conn))
+
+    def test_migration_preserves_existing_rows(self):
+        self._make_v1_db()
+        conn = db.connect(self.path)
+        conn.execute("INSERT INTO session(opened_utc) VALUES ('2026-07-13T14:00:00Z')")
+        conn.execute(
+            "INSERT INTO entry(session_id, timestamp_utc, time_source, recorded_utc, "
+            "entry_type, category, position_source) VALUES "
+            "(1, '2026-07-13T15:00:00Z', 'gps', '2026-07-13T15:00:05Z', "
+            "'manual', 'observation', 'gps')")
+        conn.commit()
+        conn.close()
+
+        d = db.open_db(self.path)
+        self.addCleanup(d.close)
+        self.assertEqual(d.schema_version(), 2)
+        self.assertEqual(d.session(1)["opened_utc"], "2026-07-13T14:00:00Z")
+        self.assertEqual(len(d.session_entries(1)), 1)
+        # the new column exists and is NULL on the pre-existing row (never destroyed)
+        self.assertIsNone(d.entry(1)["task_issue_id"])
+
+    def test_migration_writes_verified_backup(self):
+        self._make_v1_db()
+        db.open_db(self.path).close()
+        backups = list(self.dir.glob("logbook-premigrate-v1-to-v2-*.db"))
+        self.assertEqual(len(backups), 1)
+        # the backup is a readable v1 database that passes integrity_check
+        b = sqlite3.connect(backups[0])
+        try:
+            self.assertEqual(
+                b.execute("SELECT value FROM meta WHERE key = 'schema_version'")
+                .fetchone()[0], "1")
+            self.assertEqual(b.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        finally:
+            b.close()
+
+    def test_fresh_create_takes_no_backup(self):
+        db.open_db(self.path).close()   # version 0 -> create, not migrate
+        self.assertEqual(list(self.dir.glob("*premigrate*")), [])
 
 
 if __name__ == "__main__":

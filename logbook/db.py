@@ -28,7 +28,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Entry columns writable at insert time (id/edited/deleted are managed elsewhere).
 _ENTRY_COLUMNS = (
@@ -62,8 +62,11 @@ _ENTRY_EDITABLE = (
     "location_name", "radio_channel", "radio_station", "remarks",
 )
 
-# CREATE statements only. PRAGMAs are per-connection and set in connect().
-_SCHEMA = """
+# The v1 base schema — CREATE statements only; PRAGMAs are per-connection and set
+# in connect(). FROZEN: this is the historical starting point every database is
+# built from and then brought forward by the migrations in _MIGRATIONS. Never edit
+# it to change the live schema — add a migration instead (§9).
+_SCHEMA_V1 = """
 CREATE TABLE meta (
     key             TEXT PRIMARY KEY,
     value           TEXT NOT NULL
@@ -159,6 +162,11 @@ class IncompatibleDatabase(RuntimeError):
     """Raised when a database was written by a newer, unsupported schema."""
 
 
+class MigrationError(RuntimeError):
+    """Raised when a migration cannot proceed safely — e.g. its pre-migration
+    backup fails verification (§9)."""
+
+
 def to_iso_utc(dt: datetime) -> str:
     """Serialize an aware datetime to canonical ISO 8601 UTC (trailing Z).
 
@@ -212,24 +220,143 @@ def _current_version(conn: sqlite3.Connection) -> int:
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(_SCHEMA)
-    conn.execute(
-        "INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
-        (str(SCHEMA_VERSION),),
-    )
-    conn.commit()
+    """Build a new database at the v1 base, then run every migration forward.
 
-
-def _migrate(conn: sqlite3.Connection, from_version: int) -> None:
-    """Empty dispatch table until the first real schema change (§9).
-
-    When populated, each step: backs up (VACUUM INTO a timestamped file) before
-    touching anything, runs in a transaction, bumps schema_version inside it, and
-    is additive wherever possible. Never destroys data to satisfy a change.
+    A freshly created database is therefore, by construction, exactly what an old
+    one becomes after migrating — the migrations in _MIGRATIONS are the single
+    source of truth for every schema change past v1, so the two paths cannot
+    drift. No pre-migration backup is taken here: there is nothing yet to protect.
     """
-    raise IncompatibleDatabase(
-        f"no migration path from schema version {from_version} to {SCHEMA_VERSION}"
-    )
+    conn.executescript(_SCHEMA_V1)
+    conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
+    conn.commit()
+    version = 1
+    while version < SCHEMA_VERSION:
+        version = _apply_migration_step(conn, version)
+
+
+# -- schema past v1: additive migrations --------------------------------------
+#
+# Every new table or column since v1 lives here, never in _SCHEMA_V1. Each step
+# is additive (§9): new tables, or ALTER TABLE ADD COLUMN with a nullable column.
+# A fresh database runs these forward too (see _create_schema), so "created at
+# vN" and "migrated to vN" are the same database.
+
+_CHECKLIST_RUN_TABLE = """
+CREATE TABLE checklist_run (
+    id             INTEGER PRIMARY KEY,
+    session_id     INTEGER REFERENCES session(id),   -- NULLABLE: worked with or
+                                                     -- without a session open
+    checklist_key  TEXT NOT NULL,     -- which config checklist — provenance
+    title          TEXT NOT NULL,     -- snapshot: legible without config (§8)
+    started_utc    TEXT,
+    completed_utc  TEXT NOT NULL,     -- added automatically on save
+    items_json     TEXT NOT NULL,     -- snapshot of every item + tick + note
+    remarks        TEXT,
+    deleted        INTEGER NOT NULL DEFAULT 0,
+    deleted_utc    TEXT,
+    deleted_reason TEXT
+)
+"""
+
+_TASK_ISSUE_TABLE = """
+CREATE TABLE task_issue (
+    id               INTEGER PRIMARY KEY,
+    kind             TEXT NOT NULL,    -- 'task' | 'issue'
+    session_id       INTEGER REFERENCES session(id),            -- nullable
+    source           TEXT NOT NULL,    -- 'engine' | 'checklist' | 'manual'
+    checklist_run_id INTEGER REFERENCES checklist_run(id),
+    engine_run_id    INTEGER REFERENCES engine_run(id),
+    raised_utc       TEXT NOT NULL,
+    description      TEXT NOT NULL,    -- one with no description is nothing (§6.5)
+    status           TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'done'
+    done_utc         TEXT,
+    done_note        TEXT,
+    deleted          INTEGER NOT NULL DEFAULT 0,
+    deleted_utc      TEXT,
+    deleted_reason   TEXT
+)
+"""
+
+
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    """v1 → v2: Checklists and the Tasks & Issues list (§14).
+
+    Two new tables and two nullable ``entry`` columns. The DDL and the
+    schema_version bump run in ONE explicit transaction — ``executescript`` would
+    commit each statement, so it is deliberately not used: a half-applied
+    migration reporting success is worse than one that fails cleanly (§9).
+    """
+    conn.execute("BEGIN")
+    try:
+        conn.execute(_CHECKLIST_RUN_TABLE)
+        conn.execute(_TASK_ISSUE_TABLE)
+        conn.execute("ALTER TABLE entry ADD COLUMN checklist_run_id "
+                     "INTEGER REFERENCES checklist_run(id)")
+        conn.execute("ALTER TABLE entry ADD COLUMN task_issue_id "
+                     "INTEGER REFERENCES task_issue(id)")
+        conn.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+# from_version -> the step that carries it to from_version + 1.
+_MIGRATIONS = {1: _migrate_1_to_2}
+
+
+def _apply_migration_step(conn: sqlite3.Connection, from_version: int) -> int:
+    """Run the one step out of ``from_version`` and return the resulting version."""
+    step = _MIGRATIONS.get(from_version)
+    if step is None:
+        raise IncompatibleDatabase(
+            f"no migration path from schema version {from_version} to {SCHEMA_VERSION}"
+        )
+    step(conn)
+    return _current_version(conn)
+
+
+def _premigration_backup(conn, path, from_version, to_version, *, now=None):
+    """VACUUM INTO a timestamped, integrity-checked copy before a migration
+    touches anything (§9, non-negotiable).
+
+    Written beside the working database — its own directory is the safe,
+    never-synced location (§3.6). Verified with ``PRAGMA integrity_check`` before
+    the migration proceeds, so a bad copy is caught while it can still be redone.
+    Skipped only for an in-memory database, which has nothing durable to protect.
+    Returns the backup path, or None.
+    """
+    if str(path) == ":memory:":
+        return None
+    now = now or datetime.now(timezone.utc)
+    stamp = now.strftime("%Y%m%dT%H%M%SZ")
+    p = Path(path)
+    backup = p.with_name(
+        f"{p.stem}-premigrate-v{from_version}-to-v{to_version}-{stamp}{p.suffix}")
+    conn.execute("VACUUM INTO ?", (str(backup),))   # consistent, does not lock
+    verifier = sqlite3.connect(str(backup))
+    try:
+        result = verifier.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        verifier.close()
+    if result != "ok":
+        raise MigrationError(
+            f"pre-migration backup {backup.name} failed integrity check: {result}")
+    return backup
+
+
+def _migrate(conn: sqlite3.Connection, from_version: int, path) -> None:
+    """Bring an older database up to SCHEMA_VERSION, one step at a time (§9).
+
+    Every step backs up first, then applies its additive DDL and bumps
+    schema_version inside one transaction. Never destroys data to satisfy a
+    change; the third open_db branch refuses a database newer than this build.
+    """
+    version = from_version
+    while version < SCHEMA_VERSION:
+        _premigration_backup(conn, path, version, version + 1)
+        version = _apply_migration_step(conn, version)
 
 
 def open_db(path: str | Path) -> "Database":
@@ -239,7 +366,7 @@ def open_db(path: str | Path) -> "Database":
     if version == 0:
         _create_schema(conn)
     elif version < SCHEMA_VERSION:
-        _migrate(conn, version)
+        _migrate(conn, version, path)
     elif version > SCHEMA_VERSION:
         conn.close()
         raise IncompatibleDatabase(
