@@ -541,9 +541,18 @@ class LaunchView(tk.Frame):
         self._engine_btn = _big_button(row, "Engine ▶", self._toggle_engine, width=12)
         self._engine_btn.pack(side="left", padx=theme.PAD)
 
+        # Two separate lines with two different owners, deliberately not one:
+        #   _banner  — periodic STATUS, rewritten by refresh() on every 250 ms
+        #              GPS tick (engine running/error, startup warnings).
+        #   _notice  — the RESULT of the last button press (engine overlap
+        #              warnings, EngineError text). refresh() never touches it,
+        #              so a warning is not wiped a quarter-second after it shows.
         self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=self.app.font_small,
                                 wraplength=theme.DEFAULT_W - 40, justify="center")
-        self._banner.pack(pady=theme.PAD * 2)
+        self._banner.pack(pady=(theme.PAD * 2, 0))
+        self._notice = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=self.app.font_small,
+                                wraplength=theme.DEFAULT_W - 40, justify="center")
+        self._notice.pack(pady=(theme.PAD, theme.PAD * 2))
 
     def refresh(self) -> None:
         d = self.app.d
@@ -575,19 +584,35 @@ class LaunchView(tk.Frame):
         d = self.app.d
         now = datetime.now(timezone.utc)
         state = engine.timer_state(d)
+        self._notice.configure(text="")   # this press supersedes the last one's result
+        # A session may be open while the launch view is showing (the "Resume
+        # Session" case). If it is, the run belongs to it and must be marked in
+        # its log — exactly as the session-view button does. With no open
+        # session this is a run at the mooring: session_id stays NULL and there
+        # is no timeline to write to (§6.5).
+        session = d.open_session()
         try:
             if state.status is engine.TimerStatus.RUNNING:
                 result = engine.stop(d, now)
+                if session is not None:
+                    write_event(self.app, session, when=now, event_kind="engine_off",
+                                engine_run_id=result.run_id)
             elif state.status is engine.TimerStatus.STOPPED:
-                result = engine.start(d, now)
+                result = engine.start(
+                    d, now, session_id=session["id"] if session is not None else None)
+                if session is not None:
+                    write_event(self.app, session, when=now, event_kind="engine_on",
+                                engine_run_id=result.run_id)
             else:
                 return  # ERROR — button is disabled; nothing to do
         except engine.EngineError as exc:
-            self._banner.configure(text=str(exc), fg=theme.BAD)
+            self._notice.configure(text=str(exc), fg=theme.BAD)
             return
         self.refresh()
+        # Overlap/ordering warnings go on _notice, which the GPS tick leaves
+        # alone — on _banner they would survive at most one tick (§6.5).
         if result.warnings:
-            self._banner.configure(text="; ".join(result.warnings), fg=theme.WARN)
+            self._notice.configure(text="; ".join(result.warnings), fg=theme.WARN)
 
     def _start_session(self) -> None:
         session = self.app.d.open_session()

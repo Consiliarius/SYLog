@@ -114,6 +114,47 @@ class AppShellTestCase(unittest.TestCase):
         self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
         self.assertIn("■", launch._engine_btn.cget("text"))
 
+    def test_launch_engine_attributes_run_to_the_open_session(self):
+        # The launch view shows while a session is open (the "Resume Session"
+        # case). A run started there belongs to that session and must be marked
+        # in its log — not orphaned with session_id = NULL.
+        sid = self.d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        launch = self.app.views.current
+        launch.refresh()
+        launch._toggle_engine()
+
+        run = self.d.open_engine_runs()[0]
+        self.assertEqual(run["session_id"], sid)             # attributed, not NULL
+        events = [r for r in self.d.session_entries(sid)
+                  if r["event_kind"] == "engine_on"]
+        self.assertEqual(len(events), 1)                     # and marked in the log
+        self.assertEqual(events[0]["engine_run_id"], run["id"])
+
+    def test_launch_engine_at_the_mooring_stays_sessionless(self):
+        # No open session: a run at the mooring is legitimate and keeps
+        # session_id = NULL, with no timeline to write to (§6.5).
+        self.assertIsNone(self.d.open_session())
+        self.app.views.current._toggle_engine()
+        self.assertIsNone(self.d.open_engine_runs()[0]["session_id"])
+
+    def test_launch_engine_warning_survives_the_gps_tick(self):
+        # An engine warning is shown on _notice, not _banner, precisely so the
+        # 250 ms GPS tick — which rewrites _banner via refresh() — cannot wipe
+        # it. A completed run in the future makes any run started now "precede"
+        # it: an ordering warning that must stay put (§6.5).
+        with self.d.conn:
+            self.d.conn.execute(
+                "INSERT INTO engine_run(started_utc, stopped_utc, duration_min, "
+                "method, open) VALUES "
+                "('2099-01-01T10:00:00Z', '2099-01-01T11:00:00Z', 60, 'manual_times', 0)")
+        launch = self.app.views.current
+        launch.refresh()
+        launch._toggle_engine()                       # start now -> ordering warning
+        self.assertIn("precede", launch._notice.cget("text"))
+
+        self.app._drain_and_refresh()                 # the tick that used to wipe it
+        self.assertIn("precede", launch._notice.cget("text"))   # still there
+
     def test_hours_label_carries_documented_provenance(self):
         self.d.set_meta("engine_hours_baseline", "1800")
         self.d.set_meta("engine_hours_baseline_note", "documented")
