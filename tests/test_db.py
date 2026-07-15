@@ -163,6 +163,130 @@ class DbTestCase(unittest.TestCase):
         self.assertEqual(d.session_entries(sid), [])
 
 
+class ChecklistAndTaskIssueTestCase(unittest.TestCase):
+    """The checklist_run and task_issue data layer (§14).
+
+    Same discipline as entries: validated insert, edit that marks the row,
+    soft-delete with a required reason, and every list query filtering
+    deleted = 0 (invariant 7). The nullable session_id (worked ashore) and the
+    cross-session worklist are the two properties unique to this feature.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.d = db.open_db(Path(self._tmp.name) / "logbook.db")
+        self.addCleanup(self.d.close)
+
+    # -- checklist_run --------------------------------------------------------
+
+    def test_checklist_run_roundtrip_without_session(self):
+        rid = self.d.insert_checklist_run(
+            checklist_key="iwobble", title="I-WOBBLE",
+            items_json='[{"label":"Oil","checked":1,"note":"low"}]',
+            completed_utc="2026-07-13T08:15:00Z")     # session_id omitted -> NULL
+        run = self.d.checklist_run(rid)
+        self.assertIsNone(run["session_id"])
+        self.assertEqual(run["title"], "I-WOBBLE")
+        self.assertEqual(run["edited"], 0)
+        self.assertEqual(run["deleted"], 0)
+
+    def test_checklist_run_requires_core_fields(self):
+        with self.assertRaises(ValueError):
+            self.d.insert_checklist_run(
+                checklist_key="x", title="X", items_json="[]", completed_utc=None)
+
+    def test_checklist_runs_filter_deleted_and_scope_session(self):
+        sid = self.d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        a = self.d.insert_checklist_run(
+            checklist_key="k", title="A", items_json="[]",
+            completed_utc="2026-07-13T15:00:00Z", session_id=sid)
+        b = self.d.insert_checklist_run(
+            checklist_key="k", title="B", items_json="[]",
+            completed_utc="2026-07-13T16:00:00Z")     # no session
+        self.d.soft_delete_checklist_run(a, "wrong checklist")
+        self.assertEqual(self.d.checklist_runs(sid), [])            # A deleted
+        self.assertEqual([r["id"] for r in self.d.checklist_runs()], [b])  # all, live
+        self.assertEqual(len(self.d.checklist_runs_including_deleted()), 2)  # export
+
+    def test_checklist_run_edit_marks_edited(self):
+        rid = self.d.insert_checklist_run(
+            checklist_key="k", title="T", items_json="[]",
+            completed_utc="2026-07-13T15:00:00Z")
+        self.d.update_checklist_run(rid, remarks="crew briefed")
+        run = self.d.checklist_run(rid)
+        self.assertEqual(run["remarks"], "crew briefed")
+        self.assertEqual(run["edited"], 1)
+        self.assertIsNotNone(run["edited_utc"])
+
+    def test_checklist_run_delete_requires_reason(self):
+        rid = self.d.insert_checklist_run(
+            checklist_key="k", title="T", items_json="[]",
+            completed_utc="2026-07-13T15:00:00Z")
+        with self.assertRaises(ValueError):
+            self.d.soft_delete_checklist_run(rid, "   ")
+
+    # -- task_issue -----------------------------------------------------------
+
+    def test_task_issue_roundtrip_and_worklist_filters(self):
+        t = self.d.insert_task_issue(
+            kind="task", source="manual", description="Order anode",
+            raised_utc="2026-07-13T11:00:00Z")
+        i = self.d.insert_task_issue(
+            kind="issue", source="engine", description="Oil low",
+            raised_utc="2026-07-13T08:16:00Z")
+        self.assertEqual({r["id"] for r in self.d.task_issues(status="open")}, {t, i})
+        self.assertEqual([r["id"] for r in self.d.task_issues(kind="issue")], [i])
+
+    def test_task_issue_validates_kind_source_and_description(self):
+        with self.assertRaises(ValueError):
+            self.d.insert_task_issue(kind="bogus", source="manual",
+                                     description="x", raised_utc="2026-07-13T11:00:00Z")
+        with self.assertRaises(ValueError):
+            self.d.insert_task_issue(kind="task", source="bogus",
+                                     description="x", raised_utc="2026-07-13T11:00:00Z")
+        with self.assertRaises(ValueError):   # blank description is nothing (§6.5)
+            self.d.insert_task_issue(kind="task", source="manual",
+                                     description="   ", raised_utc="2026-07-13T11:00:00Z")
+
+    def test_task_issue_mark_done_moves_between_worklists(self):
+        i = self.d.insert_task_issue(
+            kind="issue", source="manual", description="Bilge float sticky",
+            raised_utc="2026-07-13T11:00:00Z")
+        self.d.mark_task_issue_done(i, done_utc="2026-07-14T09:00:00Z",
+                                    done_note="cleaned it")
+        row = self.d.task_issue(i)
+        self.assertEqual(row["status"], "done")
+        self.assertEqual(row["done_utc"], "2026-07-14T09:00:00Z")
+        self.assertEqual(row["done_note"], "cleaned it")
+        self.assertEqual(self.d.task_issues(status="open"), [])
+        self.assertEqual([r["id"] for r in self.d.task_issues(status="done")], [i])
+
+    def test_task_issue_edit_marks_edited_and_delete_hides(self):
+        i = self.d.insert_task_issue(
+            kind="issue", source="manual", description="Oil low",
+            raised_utc="2026-07-13T11:00:00Z")
+        self.d.update_task_issue(i, description="Oil below minimum")
+        self.assertEqual(self.d.task_issue(i)["description"], "Oil below minimum")
+        self.assertEqual(self.d.task_issue(i)["edited"], 1)
+        self.d.soft_delete_task_issue(i, "duplicate")
+        self.assertEqual(self.d.task_issues(), [])                        # hidden
+        self.assertEqual(len(self.d.task_issues_including_deleted()), 1)  # export sees it
+
+    def test_task_issue_links_to_checklist_run_and_session(self):
+        sid = self.d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        rid = self.d.insert_checklist_run(
+            checklist_key="iwobble", title="I-WOBBLE", items_json="[]",
+            completed_utc="2026-07-13T15:00:00Z", session_id=sid)
+        i = self.d.insert_task_issue(
+            kind="issue", source="checklist", description="Oil low",
+            raised_utc="2026-07-13T15:01:00Z", session_id=sid, checklist_run_id=rid)
+        row = self.d.task_issue(i)
+        self.assertEqual(row["checklist_run_id"], rid)
+        self.assertEqual(row["source"], "checklist")
+        self.assertEqual(len(self.d.task_issues_including_deleted(sid)), 1)
+
+
 class MigrationTestCase(unittest.TestCase):
     """The first real schema migration, v1 -> v2 (§9, §14.8).
 

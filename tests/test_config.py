@@ -72,6 +72,25 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(cfg.engine_hours_baseline_note, "documented")
         self.assertEqual(cfg.autolog_interval_min, 30)
 
+    def test_checklists_default_to_empty(self):
+        # EXAMPLE has no 'checklists' key; a config predating the feature loads,
+        # and 'none configured' is a valid empty list (§14.4).
+        self.cfg_path.write_text(json.dumps(EXAMPLE), encoding="utf-8")
+        cfg = config.load(self.cfg_path, example_path=self.example_path)
+        self.assertEqual(cfg.checklists, [])
+
+    def test_checklists_accessor_reads_configured(self):
+        data = json.loads(json.dumps(EXAMPLE))
+        data["checklists"] = [
+            {"key": "iwobble", "title": "I-WOBBLE",
+             "items": [{"label": "Isolator on"}, {"label": "Oil", "note": True}]},
+        ]
+        self.cfg_path.write_text(json.dumps(data), encoding="utf-8")
+        cfg = config.load(self.cfg_path, example_path=self.example_path)
+        self.assertEqual(len(cfg.checklists), 1)
+        self.assertEqual(cfg.checklists[0]["key"], "iwobble")
+        self.assertEqual(cfg.checklists[0]["items"][1]["note"], True)
+
     def test_missing_required_key_raises(self):
         broken = json.loads(json.dumps(EXAMPLE))
         del broken["paths"]["database"]
@@ -93,6 +112,9 @@ class ConfigTestCase(unittest.TestCase):
                           example_path=REPO_ROOT / "config.example.json")
         self.assertGreaterEqual(len(cfg.sails), 1)
         self.assertEqual(cfg.speed_gate_kn, 0.5)
+        # the shipped example ships the two starter checklists (§14.4)
+        keys = {c["key"] for c in cfg.checklists}
+        self.assertEqual(keys, {"iwobble", "closeup"})
 
     # -- baseline mirror + warn -----------------------------------------------
 

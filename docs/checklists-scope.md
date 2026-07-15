@@ -82,6 +82,8 @@ CREATE TABLE checklist_run (
                                       --   [{"label":"Oil — dipstick","checked":1,"note":"low"},
                                       --    {"label":"Belts","checked":1,"note":null}, ...]
     remarks        TEXT,              -- run-level Remarks/Observations, recallable (§14.5)
+    edited         INTEGER NOT NULL DEFAULT 0,   -- corrections are marked (§5.4)
+    edited_utc     TEXT,
     deleted        INTEGER NOT NULL DEFAULT 0,
     deleted_utc    TEXT,
     deleted_reason TEXT
@@ -104,6 +106,8 @@ CREATE TABLE task_issue (
     status           TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'done'
     done_utc         TEXT,
     done_note        TEXT,
+    edited           INTEGER NOT NULL DEFAULT 0,   -- corrections are marked (§5.4)
+    edited_utc       TEXT,
     deleted          INTEGER NOT NULL DEFAULT 0,
     deleted_utc      TEXT,
     deleted_reason   TEXT
@@ -133,8 +137,10 @@ the design avoids (cf. "no track table", §5.5).
 
 ## 14.4 Configuration
 
-Checklists live in `config.json`, like the sail wardrobe. Adding one is
-configuration, not code (§6.9).
+Checklists live in `config.json` as a top-level `checklists` array —
+configuration like the sail wardrobe (which sits under `vessel`), not code
+(§6.9). They are procedures rather than a physical attribute of the boat, so they
+sit at the top level beside `logging` and `backup`, not inside `vessel`.
 
 ```json
 "checklists": [

@@ -62,6 +62,24 @@ _ENTRY_EDITABLE = (
     "location_name", "radio_channel", "radio_station", "remarks",
 )
 
+# Checklists and Tasks & Issues (§14). Insert allowlists mirror the entry ones;
+# id/edited/deleted are managed by the layer, not passed in.
+_CHECKLIST_RUN_COLUMNS = (
+    "session_id", "checklist_key", "title", "started_utc", "completed_utc",
+    "items_json", "remarks",
+)
+_CHECKLIST_RUN_REQUIRED = ("checklist_key", "title", "completed_utc", "items_json")
+_CHECKLIST_RUN_EDITABLE = ("remarks", "items_json")
+
+_TASK_ISSUE_COLUMNS = (
+    "kind", "session_id", "source", "checklist_run_id", "engine_run_id",
+    "raised_utc", "description",
+)
+_TASK_ISSUE_REQUIRED = ("kind", "source", "raised_utc", "description")
+_TASK_ISSUE_EDITABLE = ("description", "kind")
+_TASK_ISSUE_KINDS = ("task", "issue")
+_TASK_ISSUE_SOURCES = ("engine", "checklist", "manual")
+
 # The v1 base schema — CREATE statements only; PRAGMAs are per-connection and set
 # in connect(). FROZEN: this is the historical starting point every database is
 # built from and then brought forward by the migrations in _MIGRATIONS. Never edit
@@ -253,6 +271,8 @@ CREATE TABLE checklist_run (
     completed_utc  TEXT NOT NULL,     -- added automatically on save
     items_json     TEXT NOT NULL,     -- snapshot of every item + tick + note
     remarks        TEXT,
+    edited         INTEGER NOT NULL DEFAULT 0,   -- corrections are marked (§5.4)
+    edited_utc     TEXT,
     deleted        INTEGER NOT NULL DEFAULT 0,
     deleted_utc    TEXT,
     deleted_reason TEXT
@@ -272,6 +292,8 @@ CREATE TABLE task_issue (
     status           TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'done'
     done_utc         TEXT,
     done_note        TEXT,
+    edited           INTEGER NOT NULL DEFAULT 0,   -- corrections are marked (§5.4)
+    edited_utc       TEXT,
     deleted          INTEGER NOT NULL DEFAULT 0,
     deleted_utc      TEXT,
     deleted_reason   TEXT
@@ -620,3 +642,159 @@ class Database:
         sql = (f"INSERT INTO entry({', '.join(cols)}) "
                f"VALUES ({', '.join(['?'] * len(cols))})")
         return conn.execute(sql, [fields[c] for c in cols]).lastrowid
+
+    # -- checklists (§14) -----------------------------------------------------
+
+    def insert_checklist_run(self, *, checklist_key, title, items_json, completed_utc,
+                             session_id=None, started_utc=None, remarks=None) -> int:
+        """Write one completed checklist run (§14.2).
+
+        ``session_id`` may be NULL — a checklist can be worked with no session
+        open (orientation). Title and items are a snapshot, legible without
+        config (§8)."""
+        return self._insert_row(
+            "checklist_run", _CHECKLIST_RUN_COLUMNS, _CHECKLIST_RUN_REQUIRED,
+            dict(checklist_key=checklist_key, title=title, items_json=items_json,
+                 completed_utc=completed_utc, session_id=session_id,
+                 started_utc=started_utc, remarks=remarks))
+
+    def checklist_runs(self, session_id=None, *, newest_first=True) -> list[sqlite3.Row]:
+        """Non-deleted checklist runs. ``session_id=None`` returns every run across
+        all sessions — the checklist history, including no-session runs (§14.5)."""
+        order = "DESC" if newest_first else "ASC"
+        if session_id is None:
+            return self.conn.execute(
+                f"SELECT * FROM checklist_run WHERE deleted = 0 ORDER BY id {order}"
+            ).fetchall()
+        return self.conn.execute(
+            f"SELECT * FROM checklist_run WHERE deleted = 0 AND session_id = ? "
+            f"ORDER BY id {order}", (session_id,)).fetchall()
+
+    def checklist_run(self, run_id) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM checklist_run WHERE id = ?", (run_id,)).fetchone()
+
+    def checklist_runs_including_deleted(self, session_id=None) -> list[sqlite3.Row]:
+        """Export-only. ``session_id=None`` returns every run, all sessions."""
+        if session_id is None:
+            return self.conn.execute(
+                "SELECT * FROM checklist_run ORDER BY id").fetchall()
+        return self.conn.execute(
+            "SELECT * FROM checklist_run WHERE session_id = ? ORDER BY id",
+            (session_id,)).fetchall()
+
+    def update_checklist_run(self, run_id, **fields) -> None:
+        """Correct a run's remarks or item snapshot; marks edited (§5.4)."""
+        self._update_row("checklist_run", _CHECKLIST_RUN_EDITABLE, run_id, fields)
+
+    def soft_delete_checklist_run(self, run_id, reason: str) -> None:
+        self._soft_delete("checklist_run", run_id, reason)
+
+    # -- tasks & issues (§14.6) -----------------------------------------------
+
+    def insert_task_issue(self, *, kind, source, description, raised_utc,
+                          session_id=None, checklist_run_id=None,
+                          engine_run_id=None) -> int:
+        """Add one task or issue. A description is required — one with no
+        description is nothing (§6.5). ``session_id`` may be NULL (raised ashore)."""
+        if kind not in _TASK_ISSUE_KINDS:
+            raise ValueError(f"kind must be one of {_TASK_ISSUE_KINDS}, not {kind!r}")
+        if source not in _TASK_ISSUE_SOURCES:
+            raise ValueError(f"source must be one of {_TASK_ISSUE_SOURCES}, not {source!r}")
+        if not description or not description.strip():
+            raise ValueError(
+                "a description is required — one with no description is nothing")
+        return self._insert_row(
+            "task_issue", _TASK_ISSUE_COLUMNS, _TASK_ISSUE_REQUIRED,
+            dict(kind=kind, source=source, description=description.strip(),
+                 raised_utc=raised_utc, session_id=session_id,
+                 checklist_run_id=checklist_run_id, engine_run_id=engine_run_id))
+
+    def task_issues(self, *, status=None, kind=None,
+                    newest_first=True) -> list[sqlite3.Row]:
+        """The Tasks & Issues worklist — non-deleted, across all sessions (§14.6).
+        Optionally filter by status ('open'|'done') and/or kind ('task'|'issue')."""
+        order = "DESC" if newest_first else "ASC"
+        clauses = ["deleted = 0"]
+        params: list = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        return self.conn.execute(
+            f"SELECT * FROM task_issue WHERE {' AND '.join(clauses)} ORDER BY id {order}",
+            params).fetchall()
+
+    def task_issue(self, ti_id) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM task_issue WHERE id = ?", (ti_id,)).fetchone()
+
+    def task_issues_including_deleted(self, session_id=None) -> list[sqlite3.Row]:
+        """Export-only. ``session_id=None`` returns every task/issue, all sessions
+        — the cross-cutting tasks-and-issues.csv (§14.7)."""
+        if session_id is None:
+            return self.conn.execute("SELECT * FROM task_issue ORDER BY id").fetchall()
+        return self.conn.execute(
+            "SELECT * FROM task_issue WHERE session_id = ? ORDER BY id",
+            (session_id,)).fetchall()
+
+    def mark_task_issue_done(self, ti_id, *, done_utc, done_note=None) -> None:
+        """open -> done (§14.6). A lifecycle change, not a deletion: the row stays
+        in history. The list, not the log, is authoritative for the status."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE task_issue SET status = 'done', done_utc = ?, "
+                "done_note = COALESCE(?, done_note) WHERE id = ?",
+                (done_utc, done_note, ti_id))
+
+    def update_task_issue(self, ti_id, **fields) -> None:
+        """Correct a task/issue's description or kind; marks edited (§5.4)."""
+        self._update_row("task_issue", _TASK_ISSUE_EDITABLE, ti_id, fields)
+
+    def soft_delete_task_issue(self, ti_id, reason: str) -> None:
+        self._soft_delete("task_issue", ti_id, reason)
+
+    # -- shared row helpers for the checklist_run / task_issue tables ----------
+    #
+    # These tables share the entry model — validated insert, edit that marks the
+    # row, soft-delete with a required reason — but are simple single-row writes,
+    # so one small generic serves both rather than repeating it twice. The table
+    # name is always an internal constant, never user input.
+
+    def _insert_row(self, table, allowed, required, fields) -> int:
+        unknown = set(fields) - set(allowed)
+        if unknown:
+            raise ValueError(f"unknown {table} columns: {sorted(unknown)}")
+        fields = {k: v for k, v in fields.items() if v is not None}
+        for req in required:
+            if fields.get(req) is None:
+                raise ValueError(f"{table} requires '{req}'")
+        cols = list(fields)
+        sql = (f"INSERT INTO {table}({', '.join(cols)}) "
+               f"VALUES ({', '.join(['?'] * len(cols))})")
+        with self.conn:
+            return self.conn.execute(sql, [fields[c] for c in cols]).lastrowid
+
+    def _update_row(self, table, editable, row_id, fields) -> None:
+        unknown = set(fields) - set(editable)
+        if unknown:
+            raise ValueError(f"columns are not editable: {sorted(unknown)}")
+        if not fields:
+            return
+        fields = dict(fields, edited=1,
+                      edited_utc=to_iso_utc(datetime.now(timezone.utc)))
+        assignments = ", ".join(f"{col} = ?" for col in fields)
+        with self.conn:
+            self.conn.execute(f"UPDATE {table} SET {assignments} WHERE id = ?",
+                              [*fields.values(), row_id])
+
+    def _soft_delete(self, table, row_id, reason: str) -> None:
+        if not reason or not reason.strip():
+            raise ValueError("a delete reason is required")
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE {table} SET deleted = 1, deleted_utc = ?, deleted_reason = ? "
+                f"WHERE id = ?",
+                (to_iso_utc(datetime.now(timezone.utc)), reason.strip(), row_id))

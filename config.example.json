@@ -9,6 +9,33 @@
       {"id": "storm_jib", "name": "Storm jib", "reefs": ["set"]}
     ]
   },
+  "checklists": [
+    {
+      "key": "iwobble",
+      "title": "I-WOBBLE — engine start",
+      "items": [
+        {"label": "Isolator — battery isolator on"},
+        {"label": "Water — raw-water seacock open, weed filter clear"},
+        {"label": "Oil — dipstick level checked", "note": true},
+        {"label": "Belts — alternator/water-pump belt tension"},
+        {"label": "Bilges — checked, dry", "note": true},
+        {"label": "Lookover — no leaks, tools and rags clear"},
+        {"label": "Exhaust — cooling water flowing at start"}
+      ]
+    },
+    {
+      "key": "closeup",
+      "title": "Close-up — end of passage",
+      "items": [
+        {"label": "Heads — emptied, seacocks closed"},
+        {"label": "Seacocks — engine and galley closed"},
+        {"label": "Electrics — nav, instruments, fridge off"},
+        {"label": "Gas — bottle turned off"},
+        {"label": "Hatches — closed and locked"},
+        {"label": "Fenders and lines — secure", "note": true}
+      ]
+    }
+  ],
   "logging": {
     "autolog_interval_min": 30,
     "distance_sample_sec": 30,

@@ -67,6 +67,15 @@ class Config:
     def engine_hours_baseline_note(self) -> str:
         return self._data["vessel"].get("engine_hours_baseline_note", "none")
 
+    # -- checklists (§14.4) ---------------------------------------------------
+
+    @property
+    def checklists(self) -> list[dict]:
+        """Configured checklists — top-level, optional. Defaults to [] so a config
+        predating the feature still loads, and 'none configured' is a valid state
+        (the Checklists button simply shows an empty list)."""
+        return list(self._data.get("checklists", []))
+
     # -- logging thresholds (defaults mirror config.example.json) --------------
 
     def _logging(self, key: str, default: float) -> float:
