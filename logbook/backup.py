@@ -17,7 +17,8 @@ The scope calls this "the thing most likely to be quietly skipped during
 implementation" — on aging hardware in a damp, power-unstable environment it is
 a requirement, not a nicety (§10.3).
 
-Triggered on session close, plus a manual button.
+Triggered on session close, and automatically on an interval while a session is
+open (the safety net for a long passage — never a manual mid-passage action).
 Spec: §3.6.
 """
 

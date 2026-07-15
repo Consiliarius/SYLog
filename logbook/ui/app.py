@@ -102,6 +102,7 @@ class App:
         db_path=None,
         backup_dir=None,
         backup_retention: int = 10,
+        backup_interval_min: float = 30.0,
         start_reader: bool = True,
     ) -> None:
         self.d = d
@@ -109,6 +110,9 @@ class App:
         self.db_path = db_path
         self.backup_dir = backup_dir
         self.backup_retention = backup_retention
+        self.backup_interval_min = backup_interval_min
+        self._last_backup_changes: int | None = None
+        self._backup_status: tuple[str, bool] | None = None  # (text, ok) for the bar
         self.backdate_tolerance_sec = backdate_tolerance_sec
         self.autolog_interval_min = autolog_interval_min
         self.distance_sample_sec = distance_sample_sec
@@ -143,6 +147,8 @@ class App:
             self._schedule_pump()
             self._schedule_autolog()
             self._schedule_distance()
+            if self.backup_interval_min > 0:
+                self._schedule_backup()
 
     # -- setup ----------------------------------------------------------------
 
@@ -179,7 +185,14 @@ class App:
         self._clock_label = tk.Label(self._bar, text="", fg=theme.BAD,
                                      bg=theme.BG_PANEL, font=self.font_small)
         self._clock_label.pack(side="right", padx=theme.PAD, pady=2)
+        # Automatic-backup status (§3.6): the last snapshot's time, or a loud
+        # FAILED — always visible, so a failure is never silent (§10.3) yet the
+        # short-handed skipper is never asked to do anything mid-passage.
+        self._backup_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
+                                      bg=theme.BG_PANEL, font=self.font_small)
+        self._backup_label.pack(side="right", padx=theme.PAD, pady=2)
         self._refresh_gps_indicator()
+        self._refresh_backup_indicator()
 
     # -- fullscreen and theme -------------------------------------------------
 
@@ -206,7 +219,9 @@ class App:
         self._bar.configure(bg=theme.BG_PANEL)
         self._gps_label.configure(bg=theme.BG_PANEL)
         self._clock_label.configure(bg=theme.BG_PANEL, fg=theme.BAD)
+        self._backup_label.configure(bg=theme.BG_PANEL)
         self._refresh_gps_indicator()
+        self._refresh_backup_indicator()
 
     # -- the GPS tick (thread boundary) ---------------------------------------
 
@@ -239,6 +254,13 @@ class App:
     def _refresh_gps_indicator(self) -> None:
         text, color = self.gps_state.indicator()
         self._gps_label.configure(text=text, fg=color)
+
+    def _refresh_backup_indicator(self) -> None:
+        if self._backup_status is None:
+            self._backup_label.configure(text="")
+            return
+        text, ok = self._backup_status
+        self._backup_label.configure(text=text, fg=theme.FG_MUTED if ok else theme.BAD)
 
     def _check_clock(self, fix) -> None:
         """Warn ONCE if the system clock disagrees with GPS time (§3.4).
@@ -414,6 +436,38 @@ class App:
         if time.monotonic() - self._last_persist >= self.distance_persist_min * 60:
             self.d.set_session_distance(session["id"], self.accumulator.total_nm)
             self._last_persist = time.monotonic()
+
+    def _schedule_backup(self) -> None:
+        self.root.after(int(self.backup_interval_min * 60_000), self._backup_tick)
+
+    def _backup_tick(self) -> None:
+        self.auto_backup()
+        self._schedule_backup()
+
+    def auto_backup(self) -> None:
+        """Periodic in-session snapshot (§3.6): the safety net that covers a long
+        open passage, so nothing mid-passage depends on the short-handed skipper
+        remembering to back up. Session close still takes its own final backup.
+
+        Runs only while a session is open, and only when something has actually
+        been written since the last snapshot (``total_changes`` on the shared
+        connection), so an idle mooring session does not churn identical copies.
+        A failure is left to retry next interval and is surfaced on the bar,
+        never silently swallowed (§10.3)."""
+        session = self.d.open_session()
+        if session is None or self.backup_dir is None:
+            return
+        changes = self.d.conn.total_changes
+        if self._last_backup_changes is not None and changes == self._last_backup_changes:
+            return  # nothing written since the last snapshot
+        notes = self.export_and_backup(session["id"])
+        when = datetime.now(timezone.utc).astimezone(self.tz).strftime("%H:%M")
+        failed = any("FAILED" in note for note in notes)
+        if not failed:
+            self._last_backup_changes = changes   # on failure, retry next interval
+        self._backup_status = (
+            (f"backup FAILED {when}", False) if failed else (f"backup {when}", True))
+        self._refresh_backup_indicator()
 
     def persist_distance(self) -> None:
         """Flush the accumulated total — called when a session is closed."""

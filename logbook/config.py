@@ -111,6 +111,13 @@ class Config:
         a config written before this key existed still loads."""
         return int(self._data.get("backup", {}).get("retention", 10))
 
+    @property
+    def backup_interval_min(self) -> float:
+        """Minutes between automatic in-session snapshots (§3.6). 0 disables the
+        periodic backup, leaving only the one taken on session close. Defaults if
+        absent, so a config written before this key existed still loads."""
+        return float(self._data.get("backup", {}).get("interval_min", 30))
+
 
 def load(config_path: str | Path, *, example_path: str | Path) -> Config:
     """Load config.json, copying the example on first run."""

@@ -223,6 +223,49 @@ class EndSessionArchiveTestCase(unittest.TestCase):
         self.assertIn("CSV exported", notes)
         self.assertIn("backup written and verified", notes)
 
+    # -- automatic in-session backup (§3.6) ------------------------------------
+
+    def _open_session_with_entry(self):
+        self.d.create_session(opened_utc=db.to_iso_utc(datetime.now(UTC)))
+        session = self.d.open_session()
+        self.d.insert_entry(session_id=session["id"],
+                            timestamp_utc="2026-07-13T15:00:00Z", time_source="gps",
+                            recorded_utc="2026-07-13T15:00:05Z", entry_type="manual",
+                            category="observation", position_source="none")
+        return session
+
+    def test_auto_backup_snapshots_an_open_session(self):
+        self._open_session_with_entry()
+        self.app.auto_backup()
+        self.assertTrue(list(self.backup_dir.glob("logbook-*.db")), "no snapshot taken")
+        text, ok = self.app._backup_status
+        self.assertTrue(ok)
+        self.assertIn("backup", text)          # surfaced on the bar
+
+    def test_auto_backup_does_nothing_without_a_session(self):
+        self.assertIsNone(self.d.open_session())
+        self.app.auto_backup()
+        self.assertEqual(list(self.backup_dir.glob("logbook-*.db")), [])
+        self.assertIsNone(self.app._backup_status)
+
+    def test_auto_backup_skips_when_nothing_changed(self):
+        # An idle mooring session must not churn identical copies.
+        self._open_session_with_entry()
+        self.app.auto_backup()
+        first = {p.name for p in self.backup_dir.glob("logbook-*.db")}
+        self.app.auto_backup()                 # no writes since -> no new snapshot
+        self.assertEqual({p.name for p in self.backup_dir.glob("logbook-*.db")}, first)
+
+    def test_auto_backup_takes_a_fresh_snapshot_after_a_write(self):
+        session = self._open_session_with_entry()
+        self.app.auto_backup()
+        self.d.insert_entry(session_id=session["id"],
+                            timestamp_utc="2026-07-13T15:30:00Z", time_source="gps",
+                            recorded_utc="2026-07-13T15:30:05Z", entry_type="manual",
+                            category="observation", position_source="none")
+        self.app.auto_backup()                 # something changed -> a new snapshot
+        self.assertEqual(len(list(self.backup_dir.glob("logbook-*.db"))), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

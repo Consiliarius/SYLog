@@ -126,7 +126,7 @@ SQLite via the standard library. `synchronous = FULL`, rollback journal. **Boat 
 - **Never `cp` a live SQLite database.** Use `sqlite3.Connection.backup()` or `VACUUM INTO` — both stdlib, both consistent, neither locks the working database.
 - **Timestamped filenames; never overwrite.** A corrupt backup written over the only good one destroys both. Retention of N copies, configurable.
 - **Verify after writing** — `PRAGMA integrity_check` on the backup. Milliseconds, and it catches a bad copy while it can still be redone.
-- **Triggered on session close, plus a manual button.**
+- **Triggered on session close, and automatically every `backup_interval_min` (default 30) while a session is open.** *No manual button.* A session is a logging period, not a passage (§5.1), so it can stay open for days; relying on close alone would leave a long passage with only the single working copy for its whole duration. A manual mid-passage backup is exactly the sort of thing a short-handed skipper will not stop to do — so the safety net is unattended, on a timer, not a button. The periodic snapshot is skipped when nothing has been written since the last one, so an idle mooring session does not churn identical copies. A failure is surfaced on the always-visible status bar (§10.3 — never silent), and retried on the next interval, rather than raised as a dialog that interrupts.
 - **The tool does not invoke rclone.** It writes to a configured directory. A systemd timer or NetworkManager hook runs `rclone copy` when a network appears. Preserves the "no network dependency" property.
 - **`rclone copy`, one-way, never `bisync`.** The cloud must never write a stale file back over local data.
 
@@ -491,12 +491,18 @@ Stored as JSON in `entry.sail_state`. **Accepted trade:** if sail-usage analysis
     "backdate_tolerance_sec": 60,
     "clock_offset_warn_sec": 60
   },
+  "backup": {
+    "retention": 10,
+    "interval_min": 30
+  },
   "paths": {
     "database": "~/logbook/logbook.db",
     "backup_dir": "~/OneDrive/logbook/"
   }
 }
 ```
+
+`backup.interval_min` is the automatic in-session snapshot interval (§3.6); `0` disables it, leaving only the session-close backup. `retention` is how many timestamped snapshots to keep.
 
 **JSON or `configparser`, not YAML** — `pyyaml` would break the stdlib-only rule.
 
@@ -621,7 +627,7 @@ The third branch is the one usually forgotten. **A database from a newer build m
 
 | Risk | Status |
 |---|---|
-| **Single point of failure** | The machine holds the only copy of the log until backed up. On aging hardware in a damp, vibrating, power-unstable environment, **the backup routine (§3.6) is a requirement, not a nicety.** It is also the thing most likely to be quietly skipped during implementation. |
+| **Single point of failure** | The machine holds the only copy of the log until backed up. On aging hardware in a damp, vibrating, power-unstable environment, **the backup routine (§3.6) is a requirement, not a nicety.** *Mitigated:* the snapshot now runs **automatically on an interval while a session is open**, not only at session close, so a multi-day passage is covered without any manual action — and a failure is surfaced on the status bar rather than passing silently. |
 | **rclone headless OAuth** | Configuring a OneDrive remote requires browser-based authorisation; on a netbook this means running `rclone authorize` on another machine and pasting the token across. Belongs in the README. |
 | **rclone refresh-token expiry** | Microsoft OAuth refresh tokens expire after inactivity — **believed around 90 days, but this should be verified rather than taken on trust.** A boat laid up over winter could return to a remote that no longer authenticates. **Not a data-loss risk** — local backups remain valid — but it will look like one at the worst moment. |
 | **Overlapping engine runs** | The tool warns; it does not auto-correct. The ambiguity is left with the skipper. |
@@ -689,6 +695,7 @@ The third branch is the one usually forgotten. **A database from a newer build m
 | No pre-fill; hint text instead | A pre-filled form saved unexamined produces junk that looks like observation |
 | Corrections, not erasures | A log that can be silently rewritten has no evidential value |
 | Working database never in a synced folder | Sync clients corrupt live SQLite databases |
+| Automatic interval backup while a session is open; no manual button | A session can stay open for days (session ≠ passage); a manual mid-passage backup relies on a short-handed skipper remembering, so the safety net is an unattended timer, not a button |
 | `rclone copy`, one-way, never `bisync` | The cloud must never write a stale file back over local data |
 | CSV is the archival record | It survives without a tool, and will still open in fifty years |
 | 800 × 480 design floor; touch targets; hardware keyboard assumed | Covers both a netbook and a Pi touchscreen without a rewrite |

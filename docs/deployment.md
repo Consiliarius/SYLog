@@ -39,8 +39,9 @@ used. It does **not** set the system clock itself.
   database. The backup directory (e.g. `~/OneDrive/logbook/`) receives **copies
   only**.
 - The tool writes consistent, timestamped, integrity-checked snapshots to the
-  configured `backup_dir` on session close and on demand. It never `cp`s a live
-  database and never overwrites an existing backup.
+  configured `backup_dir` on session close and automatically on an interval
+  (`backup.interval_min`, default 30) while a session is open. It never `cp`s a
+  live database and never overwrites an existing backup.
 
 ## rclone (optional off-machine copy)
 
@@ -156,7 +157,11 @@ python3 -m logbook --db ~/logbook/test.db
 press Engine ▶ and ■ · record an Observation, Sail, Radio, Multi… · Arrive ·
 End Session. Closing the session writes the four CSVs **and** a verified,
 timestamped `.db` snapshot into `backup_dir`, and reports the outcome on the
-launch screen. Check they are there:
+launch screen. A snapshot is **also** written automatically every
+`backup.interval_min` while a session is open — the status bar shows `backup
+HH:MM` after each (or a red `backup FAILED HH:MM`); to see it quickly without
+waiting, set `backup.interval_min` low (e.g. `1`) for the test. Check they are
+there:
 
 ```bash
 ls -l "$(python3 - <<'PY'

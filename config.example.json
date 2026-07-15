@@ -21,7 +21,8 @@
     "theme": "light"
   },
   "backup": {
-    "retention": 10
+    "retention": 10,
+    "interval_min": 30
   },
   "paths": {
     "database": "~/logbook/logbook.db",
