@@ -429,7 +429,7 @@ render-and-query concern over what §14 already stores.
 
 ---
 
-### 14.10.1 Resolved spec and build plan (16 July 2026 — still not built)
+### 14.10.1 Resolved spec and build plan (16 July 2026 — in build, step 1 of 6 done)
 
 **"Generated HTML" vs "an HTML viewer for the CSVs" — settled: generated.**
 Beyond §14.10 already saying so, a viewer is not technically available:
@@ -469,11 +469,11 @@ since §14.10 was parked went into the pure `render` layer as it asked:
 
 **Build plan (proposed order, each step independently green + committable):**
 
-1. `logbook/html_export.py` — a stdlib templating shim (`string.Template` or
-   f-strings; **no jinja** — §stdlib-only), an `_esc` wrapper over `html.escape`,
-   and one shared inline stylesheet constant. Print-friendly, mobile-first,
-   light-only (the tool's dark theme is a night-at-the-chart-table concern, not a
-   phone-in-daylight one).
+1. **BUILT (16 July 2026).** `logbook/html_export.py` — a stdlib templating shim
+   (`string.Template`; **no jinja** — §stdlib-only), an `_esc` wrapper over
+   `html.escape`, and one shared inline stylesheet constant. Mobile-first, light
+   only (§14.10.2). Not print-friendly, and no dark theme — both struck there,
+   with reasons.
 2. `tasks.html` + `index.html` from existing rows — the near-term wish, earliest
    value, no new queries.
 3. `session-NNN.html` from `export_session`'s own row dicts.
@@ -540,11 +540,18 @@ dropping them would make the page say something the tool refuses to say:**
 - **Readable on a phone without pinch-zoom.** Fluid width, ~16 px base, no fixed
   pixel layouts. The body never scrolls horizontally; a wide table scrolls inside
   its own container.
-- **Light and dark via `prefers-color-scheme`** — free, no JS, and the tool's own
-  §3.2 night-vision reasoning applies to a phone on a boat at night just as it
-  does to the chart table. *(An earlier draft of §14.10.1 said "light-only" and
-  "print-friendly". Both were asserted without a reason: nobody asked to print
-  it, and CSV is the archival record if anyone ever does. Struck.)*
+- **Light only** — decided 16 July 2026, when the build reached it. One theme is
+  one less thing to be wrong on a device the tool is never tested against. An
+  earlier draft of this section argued for light *and* dark via
+  `prefers-color-scheme`, on the grounds that §3.2's night-vision reasoning
+  carries from the chart table to a phone on a boat at night. That argument
+  stands on its merits; the decision was still one theme. Revisit only if
+  reading it at night proves genuinely unpleasant — the CSS variables are
+  already in one block at the top of `html_export.py`, so a media query is a
+  small change, not a rewrite.
+- **Not print-friendly.** An earlier draft of §14.10.1 asserted it without a
+  reason: nobody asked to print it, and CSV is the archival record if anyone
+  ever does. Struck, and stays struck.
 
 **The one genuinely open question, for whoever builds it:** the entries timeline
 on a narrow screen. It is the widest thing here — time, position, sails, weather,
