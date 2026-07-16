@@ -427,6 +427,68 @@ cheap to add later):**
 No schema or data change is needed for the future HTML view; it is a pure
 render-and-query concern over what §14 already stores.
 
+---
+
+### 14.10.1 Resolved spec and build plan (16 July 2026 — still not built)
+
+**"Generated HTML" vs "an HTML viewer for the CSVs" — settled: generated.**
+Beyond §14.10 already saying so, a viewer is not technically available:
+`fetch()`/XHR from a `file://` page is **CORS-blocked** in every modern browser,
+so a double-clicked `viewer.html` cannot read its sibling CSVs. It would need a
+file-picker (friction on a phone), or a local HTTP server — which §11 rules out.
+A viewer only becomes an option if the directory is ever served over HTTP; it is
+not one now.
+
+**The enabling condition is already met.** Every human-string renderer added
+since §14.10 was parked went into the pure `render` layer as it asked:
+`one_line`, `passage_summary`, `checklist_summary`, `split_label`,
+`task_issue_line`, `engine_run_line`/`engine_run_when`, `vessel_bar`,
+`format_hm`, `format_position`. There is no Tk-only string to extract.
+
+**Decisions §14.10 left open, resolved here:**
+
+| Question | Resolution |
+|---|---|
+| Rendered from the DB, or from the CSV rows? | **From the same row dicts `export.py` already builds** for the CSVs (`_entry_row`, `_summary_row`, `sail_columns`, …). Parity by construction: the page cannot disagree with the archive, and it stays honest that HTML is a *rendering of* the record, not a second record. |
+| When is it generated? | **On export**, beside the CSVs — export already runs at End Session. Cross-cutting pages (index, worklist, engine) regenerate every time, exactly as `engine-cumulative.csv` already does; the session page is written for the session being exported. Idempotent and re-runnable. |
+| Where does it go? | The **backup directory** (§14.10), so the existing `rclone copy` carries it to the phone with no new mechanism. Confirm against `export.py`'s current `out_dir` before building. |
+| Self-contained? | **Yes — inline the CSS, no JS, no CDN, no web fonts.** It is read on a phone, possibly offline, possibly years later. (`<link>` to a sibling stylesheet *would* work over `file://` — only fetch is blocked — but inlining removes the question.) |
+| Deleted rows? | Shown, struck through and flagged — as the CSV does and the viewer does. With no JS there is no "Show deleted" toggle; `<details>` is the no-JS option if hiding is wanted. |
+| Escaping | **`html.escape` on every interpolated value, without exception.** Remarks, item labels, notes, place names and the vessel name are all free text: one `<` in a remark otherwise breaks the page. This is the single likeliest bug in the whole job. |
+
+**Pages** (stable filenames, so `rclone copy` overwrites rather than accumulates):
+
+- `index.html` — the dashboard: vessel identity (from `meta`, §15.4), cumulative
+  engine hours with their §7 provenance, open tasks/issues count, session list.
+- `tasks.html` — the Tasks & Issues worklist. The **near-term wish** behind the
+  whole idea (§14.10); build this one first if the job is ever split.
+- `session-NNN.html` — the logbook page: summary, the entries timeline, engine
+  runs, checklist runs, passage split (§5.6).
+- `engine.html` — cumulative hours: baseline + provenance, then every run.
+  Mirrors `engine_log.EngineHoursView` (§14.11) — reuse `render.engine_run_line`.
+
+**Build plan (proposed order, each step independently green + committable):**
+
+1. `logbook/html_export.py` — a stdlib templating shim (`string.Template` or
+   f-strings; **no jinja** — §stdlib-only), an `_esc` wrapper over `html.escape`,
+   and one shared inline stylesheet constant. Print-friendly, mobile-first,
+   light-only (the tool's dark theme is a night-at-the-chart-table concern, not a
+   phone-in-daylight one).
+2. `tasks.html` + `index.html` from existing rows — the near-term wish, earliest
+   value, no new queries.
+3. `session-NNN.html` from `export_session`'s own row dicts.
+4. `engine.html` reusing `render.engine_run_line`.
+5. Wire into `export.py` beside the CSV writers; a `--no-html` escape hatch if
+   generation ever proves slow on the netbook.
+6. Tests: assert escaping (a remark containing `<script>` must not execute),
+   that every page is self-contained (no `http://`, no `src=`/`href=` off-box),
+   and that a page's figures match the CSV's for the same session.
+
+**Explicitly still out of scope:** any *write*-capable web frontend. §11 and
+§14.10 both hold — read-only, no concurrency model, no network dependency in the
+tool. This remains additive, not a rewrite ([[architecture]]: the core is
+UI-agnostic, so a web *input* path stays a separate, further-off question).
+
 ## 14.11 Future development backlog (flagged, not built)
 
 Raised during first-pass testing; recorded here so they are not lost, with no
