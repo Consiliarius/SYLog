@@ -63,7 +63,14 @@ SESSION_COLUMNS = (
 # The derived time split (§5.6) is written into the summary so the archival
 # record carries it directly, rather than leaving it to be reconstructed from
 # the event pairs in the entries file — the same reasoning as engine-cumulative.
-SUMMARY_COLUMNS = SESSION_COLUMNS + ("time_under_way_min", "time_stationary_min")
+#
+# The vessel's identity (§15.4) is carried too, so every exported session names
+# the boat it came from. Read from `meta`, never config — the archival artefact
+# cannot depend on a file that is not itself archived (§8). Dimensions are NOT
+# here: they are specification, not identity, and do not identify a record.
+VESSEL_COLUMNS = ("vessel_name", "vessel_ssr", "vessel_callsign", "vessel_mmsi")
+SUMMARY_COLUMNS = (SESSION_COLUMNS + ("time_under_way_min", "time_stationary_min")
+                   + VESSEL_COLUMNS)
 
 CUMULATIVE_COLUMNS = ENGINE_COLUMNS + ("engine_hours_baseline", "engine_hours_baseline_note")
 
@@ -204,9 +211,18 @@ def export_session(d, session_id, out_dir, *, sails=None,
 
 
 def _summary_row(d, session) -> dict:
-    """Session metadata plus the derived time split (§5.6), rounded to minutes."""
+    """Session metadata, the derived time split (§5.6), and the vessel's identity.
+
+    Identity comes from ``meta`` (§15.4) — mirrored there from config at startup —
+    so the file names its vessel without depending on config, which is not
+    archived (§8). It resolves at EXPORT time, so re-exporting an old session
+    stamps it with the current identity: accepted, and the same precedent as sail
+    names resolving at export time.
+    """
     row = {col: session[col] for col in SESSION_COLUMNS}
     split = passage.time_split(d.passage_events(session["id"]), session)
     row["time_under_way_min"] = round(split.under_way_min, 1)
     row["time_stationary_min"] = round(split.stationary_min, 1)
+    for col in VESSEL_COLUMNS:
+        row[col] = d.get_meta(col, "")
     return row

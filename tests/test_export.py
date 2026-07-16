@@ -163,6 +163,37 @@ class ExportTestCase(unittest.TestCase):
         self.assertEqual(float(row["time_under_way_min"]), 150.0)    # 09:30 -> 12:00
         self.assertEqual(float(row["time_stationary_min"]), 90.0)    # 240 − 150
 
+    # -- vessel identity in the summary (§15.4) --------------------------------
+
+    def test_summary_names_its_vessel_from_meta(self):
+        # Read from meta, never config — the archive can't depend on an
+        # unarchived file (§8).
+        self.d.set_meta("vessel_name", "Kingfisher")
+        self.d.set_meta("vessel_ssr", "123456")
+        self.d.set_meta("vessel_callsign", "MABC1")
+        self.d.set_meta("vessel_mmsi", "232001234")
+        self._export()
+        row = read_csv(self.out / "session-001-summary.csv")[0]
+        self.assertEqual(row["vessel_name"], "Kingfisher")
+        self.assertEqual(row["vessel_ssr"], "123456")
+        self.assertEqual(row["vessel_callsign"], "MABC1")
+        self.assertEqual(row["vessel_mmsi"], "232001234")
+
+    def test_summary_vessel_columns_blank_when_unmirrored(self):
+        # No identity configured: the columns are present but empty — stable
+        # headers, every column always (§8).
+        self._export()
+        row = read_csv(self.out / "session-001-summary.csv")[0]
+        self.assertEqual(list(row.keys()), list(export.SUMMARY_COLUMNS))
+        self.assertEqual(row["vessel_mmsi"], "")
+
+    def test_summary_carries_no_dimensions(self):
+        # Dimensions are specification, not identity — deliberately not exported.
+        self._export()
+        row = read_csv(self.out / "session-001-summary.csv")[0]
+        for absent in ("length", "beam", "draught", "air_draught"):
+            self.assertNotIn(absent, row)
+
     # -- checklists and Tasks & Issues (§14.7) ---------------------------------
 
     def test_checklists_csv_legible_and_parseable(self):
