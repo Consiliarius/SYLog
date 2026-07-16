@@ -146,7 +146,7 @@ class TaskIssueFormView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._back).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
 
@@ -204,7 +204,7 @@ class TaskIssueDoneView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._back).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Mark done", self._confirm).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
 

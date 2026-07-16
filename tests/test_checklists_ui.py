@@ -52,14 +52,12 @@ class ChecklistUITestCase(unittest.TestCase):
         self.assertIn("Tasks", launch._tasks_btn.cget("text"))
 
     def test_launch_title_carries_the_vessel_name(self):
-        try:
-            app = App(self.d, start_reader=False, vessel_name="Kingfisher")
-        except tk.TclError as exc:
-            self.skipTest(f"no Tk display: {exc}")
-        self.addCleanup(app.root.destroy)
-        app.root.withdraw()
-        self.assertIn("Simple Yacht Log", app.views.current._title.cget("text"))
-        self.assertIn("Kingfisher", app.views.current._title.cget("text"))
+        # Reuse the one App (a second Tk root in the same process is flaky).
+        self.app.vessel_name = "Kingfisher"
+        self.app.show_launch()
+        title = self.app.views.current._title.cget("text")
+        self.assertIn("Simple Yacht Log", title)
+        self.assertIn("Kingfisher", title)
 
     def test_picker_lists_configured_checklists(self):
         from logbook.ui.checklists import ChecklistPickerView, ChecklistRunView

@@ -700,3 +700,4 @@ The third branch is the one usually forgotten. **A database from a newer build m
 | CSV is the archival record | It survives without a tool, and will still open in fifty years |
 | 800 × 480 design floor; touch targets; hardware keyboard assumed | Covers both a netbook and a Pi touchscreen without a rewrite |
 | Single window, fixed split, no `Toplevel` | Secondary windows and draggable sashes add a class of bug for no benefit |
+| Footer convention: back-out left, progress right; buttons ~36 px | Settled in netbook testing — the 44 px touch floor was larger than a finger needs; applied across every footer for consistency |

@@ -421,6 +421,9 @@ class FormView(tk.Frame):
 
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
+        # Cancel far left (back out), Save far right (progress); Back/Next paging
+        # sit between — the app-wide convention: left backs out, right progresses.
+        _big_button(footer, "Cancel", self._cancel).pack(side="left", padx=theme.PAD, pady=theme.PAD)
         self._back = _big_button(footer, "‹ Back", self._prev)
         self._back.pack(side="left", padx=theme.PAD, pady=theme.PAD)
         self._next = _big_button(footer, "Next ›", self._advance)
@@ -428,7 +431,6 @@ class FormView(tk.Frame):
         self._page_label = tk.Label(footer, bg=theme.BG_PANEL, fg=theme.FG_MUTED,
                                     font=self.app.font_small)
         self._page_label.pack(side="left", padx=theme.PAD)
-        _big_button(footer, "Cancel", self._cancel).pack(side="right", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(side="right", padx=theme.PAD, pady=theme.PAD)
 
     def _show_page(self, index):
@@ -565,7 +567,7 @@ class MultiTickView(tk.Frame):
                 anchor="w", padx=theme.PAD * 3, pady=2)
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
-        _big_button(footer, "Cancel", self._cancel).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Cancel", self._cancel).pack(side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Next ›", self._next).pack(side="right", padx=theme.PAD, pady=theme.PAD)
 
     def _cancel(self):
@@ -680,7 +682,7 @@ class DepartArriveForm(tk.Frame):
 
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
-        _big_button(footer, "Cancel", self._cancel).pack(side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Cancel", self._cancel).pack(side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(side="right", padx=theme.PAD, pady=theme.PAD)
 
     def _pick_place(self, value):
@@ -780,7 +782,7 @@ class EngineFormView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Back to log", self._cancel).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
 
     def _cancel(self):
         self.app.show_session(self.session)
@@ -972,10 +974,10 @@ class SessionStartView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", app.show_launch).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Skip", self._skip).pack(side="right", padx=2, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Start session", self._start).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Skip", self._skip).pack(side="right", padx=2, pady=theme.PAD)
 
     def _open(self, **fields):
         d = self.app.d
@@ -1012,7 +1014,7 @@ class SessionEditView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._cancel).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
 
@@ -1080,7 +1082,7 @@ class EndSessionView(tk.Frame):
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._cancel).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
+            side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "End session", self._end).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
 
