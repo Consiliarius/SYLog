@@ -20,7 +20,9 @@ Spec: §7 (configuration), §15 (vessel reference).
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from logbook import db
@@ -55,6 +57,40 @@ class Config:
     def __init__(self, data: dict, path: Path) -> None:
         self._data = data
         self.path = path
+
+    # -- the Settings editor's write surface (§15.5) --------------------------
+
+    @property
+    def data(self) -> dict:
+        """The raw loaded config — live and mutable.
+
+        The Settings editor edits *this dict in place* and calls save(). Mutating
+        the loaded document, rather than reconstructing one from known keys, is
+        precisely what preserves any key this build does not know about.
+        """
+        return self._data
+
+    def save(self) -> Path:
+        """Write config.json atomically, keeping the previous file as ``.bak``.
+
+        The tool has only ever READ config; writing it is a new capability, so it
+        borrows export.py's discipline — a temp file in the same directory, then
+        ``os.replace``. A power cut mid-write must not be able to leave a
+        half-written config, because that would stop the tool starting at all.
+        """
+        path = Path(self.path)
+        text = json.dumps(self._data, indent=2, ensure_ascii=False) + "\n"
+        if path.exists():                       # last-known-good, cheap insurance
+            shutil.copyfile(path, path.with_name(path.name + ".bak"))
+        handle, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        os.close(handle)
+        try:
+            Path(tmp).write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        return path
 
     # -- paths (``~`` expanded) ----------------------------------------------
 

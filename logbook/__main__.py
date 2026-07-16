@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> None:
         vessel_name=cfg.vessel_name,
         vessel=cfg.vessel_reference,
         locations=cfg.locations,
+        config=cfg,                  # the Settings editor's read/write surface
+
         backdate_tolerance_sec=cfg.backdate_tolerance_sec,
         autolog_interval_min=cfg.autolog_interval_min,
         distance_sample_sec=cfg.distance_sample_sec,

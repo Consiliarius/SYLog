@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 
 from logbook import db
 from logbook.ui import render, theme
-from logbook.ui.app import _big_button, raise_task_issue, write_checklist_complete_event
+from logbook.ui.app import (_big_button, _ScrollBody, raise_task_issue,
+                            write_checklist_complete_event)
 
 
 def _item_fonts(app):
@@ -39,32 +40,6 @@ def _text_box(app, parent, *, height=3, width=48):
                    bg=theme.BG_PANEL, fg=theme.FG, insertbackground=theme.FG,
                    bd=0, highlightthickness=1, highlightbackground=theme.BG_BUTTON,
                    font=app.font_base)
-
-
-class _ScrollBody(tk.Frame):
-    """A vertically scrollable container for item lists that may exceed the
-    800×480 floor (§2.1). Content goes into ``.inner``."""
-
-    def __init__(self, parent):
-        super().__init__(parent, bg=theme.BG)
-        self._canvas = tk.Canvas(self, bg=theme.BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
-        self.inner = tk.Frame(self._canvas, bg=theme.BG)
-        self.inner.bind("<Configure>", lambda e: self._canvas.configure(
-            scrollregion=self._canvas.bbox("all")))
-        self._win = self._canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self._canvas.bind("<Configure>",
-                          lambda e: self._canvas.itemconfigure(self._win, width=e.width))
-        self._canvas.configure(yscrollcommand=scroll.set)
-        self._canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        # Wheel is bound only while the pointer is over this body, and released on
-        # leave, so a destroyed view leaves no global binding behind.
-        self.bind("<Enter>", lambda e: self._canvas.bind_all("<MouseWheel>", self._wheel))
-        self.bind("<Leave>", lambda e: self._canvas.unbind_all("<MouseWheel>"))
-
-    def _wheel(self, event):
-        self._canvas.yview_scroll(int(-event.delta / 120), "units")
 
 
 class _TickBox(tk.Canvas):

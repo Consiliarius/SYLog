@@ -97,6 +97,7 @@ class App:
         vessel_name: str = "",
         vessel: dict | None = None,
         locations: list[str] | None = None,
+        config=None,
         backdate_tolerance_sec: float = 60.0,
         autolog_interval_min: float = 30.0,
         distance_sample_sec: float = 30.0,
@@ -115,6 +116,10 @@ class App:
         self.vessel_name = vessel_name
         self.vessel = vessel or {}      # reference data: the card and the bar (§15.3)
         self.locations = locations or []
+        # The loaded Config, for the Settings editor to read and write (§15.5).
+        # None when the app is built without one (tests): the ⚙ simply does not
+        # appear, rather than opening an editor with nothing behind it.
+        self.config = config
         self.db_path = db_path
         self.backup_dir = backup_dir
         self.backup_retention = backup_retention
@@ -193,9 +198,20 @@ class App:
                                      bg=theme.BG_PANEL, font=self.font_small, anchor="w")
         self._where_label.pack(side="left", padx=theme.PAD, pady=2)
 
-        # RIGHT (rightmost first): GPS fix, then the clock offset and auto-backup
-        # status (§3.6) — always visible, so a failure is never silent (§10.3),
-        # yet the short-handed skipper is never asked to do anything mid-passage.
+        # RIGHT (rightmost first): the ⚙, then GPS fix, the clock offset and the
+        # auto-backup status (§3.6) — always visible, so a failure is never silent
+        # (§10.3), yet the short-handed skipper is never asked to do anything
+        # mid-passage. The ⚙ lives here so Settings is reachable from any view
+        # (§15.5); it is omitted entirely when there is no config behind it.
+        if self.config is not None:
+            self._settings_btn = tk.Button(
+                self._bar, text="⚙", command=self.show_settings,
+                bg=theme.BG_PANEL, fg=theme.FG_MUTED,
+                activebackground=theme.BG_PANEL, activeforeground=theme.FG,
+                bd=0, relief="flat", highlightthickness=0, padx=theme.PAD,
+                pady=0, cursor="hand2", font=self.font_small)
+            self._settings_btn.pack(side="right", pady=2)
+
         self._gps_label = tk.Label(self._bar, text="GPS offline", fg=theme.BAD,
                                    bg=theme.BG_PANEL, font=self.font_small)
         self._gps_label.pack(side="right", padx=theme.PAD, pady=2)
@@ -417,6 +433,20 @@ class App:
     def show_tasks(self, event=None) -> None:
         from logbook.ui import tasks
         self._show(lambda: tasks.TasksIssuesView(self._content, self))
+
+    def show_settings(self, event=None) -> None:
+        """Open Settings, remembering how to rebuild the view we came from.
+
+        The ⚙ is on the always-visible bar, so this can be pressed from anywhere
+        — and Back must return there rather than dumping the skipper on the
+        launcher, which mid-passage would force a Resume (§15.5). ``_reshow`` is
+        captured BEFORE ``_show`` overwrites it with this view's own factory.
+        """
+        if self.config is None:
+            return
+        from logbook.ui import settings
+        caller = self._reshow
+        self._show(lambda: settings.SettingsView(self._content, self, back=caller))
 
     def show_task_form(self, kind, *, checklist_run_id=None) -> None:
         from logbook.ui import tasks
@@ -670,6 +700,35 @@ def _vessel_card(parent, app):
         if index < len(groups) - 1:
             card.columnconfigure(col + 2, minsize=theme.PAD * 5)
     return card
+
+
+class _ScrollBody(tk.Frame):
+    """A vertically scrollable container for content taller than the 800×480
+    floor (§2.1). Put content in ``.inner``.
+
+    Shared: the checklist form and the Settings editor both outgrow the screen.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent, bg=theme.BG)
+        self._canvas = tk.Canvas(self, bg=theme.BG, highlightthickness=0, bd=0)
+        scroll = tk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
+        self.inner = tk.Frame(self._canvas, bg=theme.BG)
+        self.inner.bind("<Configure>", lambda e: self._canvas.configure(
+            scrollregion=self._canvas.bbox("all")))
+        self._win = self._canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self._canvas.bind("<Configure>",
+                          lambda e: self._canvas.itemconfigure(self._win, width=e.width))
+        self._canvas.configure(yscrollcommand=scroll.set)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        # Wheel is bound only while the pointer is over this body, and released on
+        # leave, so a destroyed view leaves no global binding behind.
+        self.bind("<Enter>", lambda e: self._canvas.bind_all("<MouseWheel>", self._wheel))
+        self.bind("<Leave>", lambda e: self._canvas.unbind_all("<MouseWheel>"))
+
+    def _wheel(self, event):
+        self._canvas.yview_scroll(int(-event.delta / 120), "units")
 
 
 def _hm(minutes: float) -> str:
