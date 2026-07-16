@@ -142,6 +142,15 @@ configuration like the sail wardrobe (which sits under `vessel`), not code
 (§6.9). They are procedures rather than a physical attribute of the boat, so they
 sit at the top level beside `logging` and `backup`, not inside `vessel`.
 
+**Editable in the Settings editor** since §15.5 — the ⚙ on the status bar, under
+*Checklists*. Hand-editing the JSON still works and remains the reference; the
+editor is built on the same record list that serves `sails`. Two things it does
+that the raw JSON makes easy to get wrong: an item's `label` is presented as the
+**Title + Descriptor** it is rendered as rather than as one dash-joined string,
+and `note` is written **only when true** (absent means false — the flag merely
+pre-expands the field; it never makes a note required). Changes take effect when
+the tool restarts.
+
 ```json
 "checklists": [
   {

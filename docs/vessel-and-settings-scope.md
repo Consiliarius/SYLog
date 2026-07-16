@@ -1,16 +1,16 @@
 # Vessel Logbook Tool — §15 Vessel Reference & Settings
 
-**Status:** §15 is **built**. **Done:** config accessors + the `meta` identity
+**Status:** §15 is **built**, and the checklist editor it was told not to
+preclude is now built on it too. **Done:** config accessors + the `meta` identity
 mirror; the four identity columns in the summary CSV; the launch card, the slim
 session bar and the Radio hint; the Settings shell (⚙, return-to-caller nav,
-atomic write, scalars), the standing-locations list, and the sails record-list —
-built as `_RecordListSection` (the outer list: add/remove records, edit key +
-name, host a child editor) with a *pluggable child-list editor*
-(`_StringListEditor` for reefs), so the deferred checklist editor is a subclass
-plus one child editor rather than a second build.
-**Remaining:** nothing in §15. `checklists` stays deferred by decision, and is no
-longer precluded — a test exercises the record list with a different child editor
-to keep that true.
+atomic write, scalars); the standing-locations list; and the record list —
+`_RecordListSection` (add/remove records, edit key + name, collapse, host a child
+editor) with a *pluggable child-list editor*, serving **sails**
+(`_StringListEditor`, reefs as strings) and **checklists** (`_ItemListEditor`,
+items as objects: label + note flag).
+**Remaining:** nothing in §15. The only checklist work left is the §14.11
+backlog, which is unrelated to this editor.
 **Date:** 16 July 2026
 
 Extends `logbook-scope.md`. Numbered §15 so it slots in without renumbering the
@@ -158,27 +158,53 @@ view. **Back returns to the calling view**, not the launcher; otherwise opening
 settings mid-session would force a Resume. If ⚙ (U+2699) fails to render on the
 netbook, fall back to a small "Settings" text button rather than draw one.
 
-**In scope now:** vessel details, `ui.theme`, the `logging` thresholds, `backup`
-retention/interval, the `locations` list, and the `sails` list.
+**In scope:** vessel details, `ui.theme`, the `logging` thresholds, `backup`
+retention/interval, the `locations` list, the `sails` list, and the `checklists`
+list.
 
-**Out of scope now, by decision:**
+**Out of scope, by decision:**
 
 | Excluded | Why |
 |---|---|
-| `paths.database`, `paths.backup_dir` | The risky tier. Leaving them out also removes invariant 11 (database never inside the backup directory) from the editor entirely — validation reduces to "numbers parse, theme is light/dark, sails have id + name". |
+| `paths.database`, `paths.backup_dir` | The risky tier. Leaving them out also removes invariant 11 (database never inside the backup directory) from the editor entirely — validation reduces to "numbers parse, theme is light/dark, records have a key + a name". |
 | `engine_hours_baseline` and its note | A trap: §7 makes `meta` authoritative, so editing the baseline in a GUI would *appear to do nothing*. Changing cumulative hours stays a deliberate, effortful act. |
-| `checklists` | Deferred, but **must not be precluded** — see below. |
 
-**Structured so checklists drop in later.** `sails` and `checklists` are
+**The record list, and how checklists dropped in.** `sails` and `checklists` are
 structurally near-identical — a list of records, each with a key, a display name,
 and a nested child list:
 
 - `sails`: `id`, `name`, `reefs[]` *(list of strings)*
 - `checklists`: `key`, `title`, `items[]` *(list of objects: label + note flag)*
 
-So the sails editor is written as a **reusable record-list component with a
-pluggable child-list editor**. Checklists then become largely a drop-in rather
-than a second build — which is what "don't preclude checklists" requires.
+So the sails editor was written as a **reusable record-list component with a
+pluggable child-list editor**, on the rule that checklists must not be precluded.
+
+**That held, and is worth recording honestly.** Adding checklists needed *no
+change at all* to the outer `_RecordListSection` — a subclass naming its keys
+plus one new child editor. The **child** seam did bend: `_StringListEditor` had
+kept its rows as `(frame, entry)` pairs, which an item row (two fields plus a
+flag) cannot be, so the scaffolding was lifted into a `_ChildListEditor` base
+whose rows are row *objects*. The expensive half was right; the cheap half needed
+a nudge.
+
+**Three decisions made when checklists arrived** (§15.6):
+
+- **An item's label is edited as the two fields it is rendered as.** The config
+  stores one string that `render.split_label` splits at its first dash into a
+  bold title over an italic descriptor; the editor shows Title and Descriptor and
+  rejoins them with `' — '`. The skipper should not have to know the convention,
+  still less type an em-dash on the netbook. **An untouched label is written back
+  byte-for-byte** — `split_label` also accepts `' - '`, so rejoining every label
+  on save would quietly renormalise items nobody went near.
+- **Records are collapsed by default**, expanding on click; a record just added
+  opens, having been added in order to be filled in. Every sail's reefs and every
+  checklist's items open at once measured ~2600 px against a 600 px screen, which
+  put the backup interval below a wall of item rows. Collapsed, the page is
+  1670 px and the sails section fell 748 → 298 px.
+- **Child lists reorder** (▲▼). Order is load-bearing in both — reefs run full to
+  deepest, and a checklist is a sequence worked top to bottom (I-WOBBLE is a
+  *mnemonic*). Without it, a misplaced item means remove, re-add at the end,
+  retype.
 
 **Writing config is a new capability** — the tool has only ever read it (plus the
 first-run copy). Three non-negotiables follow:
@@ -213,6 +239,12 @@ visible consequences, accepted:
 | Dimensions not mirrored or exported | Specification, not identity; they do not identify a record |
 | Settings editor excludes `paths` and `engine_hours_baseline` | Removes invariant 11 from the editor entirely; the baseline would be a GUI that appears to do nothing (§7) |
 | Sails editor built as a reusable record-list + pluggable child list | `sails` and `checklists` are the same shape; this makes checklists a drop-in later |
+| Checklists reuse it: the outer list needed no change, the child seam did | Vindicated the split, but the child editor's `(frame, entry)` row shape could not hold an item (two fields + a flag) — rows became objects under a `_ChildListEditor` base |
+| An item's label is edited as Title + Descriptor and rejoined with `' — '` | The config's one string is *rendered* as two (`render.split_label`); the skipper should not have to know the dash convention or type an em-dash on the netbook |
+| …but an untouched label is written back byte-for-byte | `split_label` also accepts `' - '`, so rejoining unconditionally would renormalise separators in items nobody edited |
+| `note: true` written only when set; absent means false | It only pre-expands the run form's field (§14.4) — it never makes a note required, and writing `false` everywhere is noise |
+| Records collapse by default; a newly added one opens | Everything expanded measured ~2600 px against a 600 px screen, burying the scalars; collapsed the page is 1670 px |
+| Child lists reorder with ▲▼ | Order is load-bearing: reefs run full to deepest, and I-WOBBLE is a mnemonic — remove-and-retype is not a reordering story |
 | Config changes take effect on restart | One rule beats a half-applied state; the running timers are where live-reapply would go wrong |
 
 ---

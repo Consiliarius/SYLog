@@ -178,8 +178,9 @@ class ChecklistPickerView(tk.Frame):
         body = _ScrollBody(self)
         body.pack(fill="both", expand=True, padx=theme.PAD, pady=theme.PAD)
         if not app.checklists:
-            tk.Label(body.inner, text="No checklists configured. Add them under the "
-                     "top-level \"checklists\" key in config.json.", bg=theme.BG,
+            tk.Label(body.inner, text="No checklists configured. Add them in "
+                     "Settings (the ⚙ on the status bar); they appear here when "
+                     "the tool restarts.", bg=theme.BG,
                      fg=theme.FG_MUTED, font=app.font_base, wraplength=theme.DEFAULT_W - 60,
                      justify="left").pack(anchor="w", pady=theme.PAD)
         for cl in app.checklists:
