@@ -274,3 +274,50 @@ def task_issue_line(row, *, tz: tzinfo = timezone.utc) -> str:
         state = "open"
     parts.append(state)
     return f"{row['kind'].upper():6} {' · '.join(parts)}"
+
+
+# -- engine-hours log (§14.11) ------------------------------------------------
+
+# `method` as stored -> what a skipper reads. The stored values are internal
+# vocabulary (engine.py), never shown raw.
+_ENGINE_METHODS = {
+    "paired": "timer",                      # the live Start/Stop button
+    "manual_times": "entered, start + stop",
+    "manual_duration": "entered, duration",  # NO timestamps exist for these
+}
+
+
+def engine_run_when(row, *, tz: tzinfo = timezone.utc) -> str:
+    """When a run happened: '26 Jul 14:02–16:20', or '26 Jul 14:02–' while it is
+    still running.
+
+    **'—' for a `manual_duration` run**, which genuinely has no times: a duration
+    typed in after the fact records how long, never when. Inventing one would
+    fabricate an observation (§4.1), so the column is honestly empty.
+    """
+    if not row["started_utc"]:
+        return "—"
+    started = db.parse_iso_utc(row["started_utc"]).astimezone(tz)
+    if not row["stopped_utc"]:
+        return f"{started.strftime('%d %b %H:%M')}–"
+    stopped = db.parse_iso_utc(row["stopped_utc"]).astimezone(tz)
+    return f"{started.strftime('%d %b %H:%M')}–{stopped.strftime('%H:%M')}"
+
+
+def engine_run_line(row, *, tz: tzinfo = timezone.utc) -> str:
+    """One engine run as a line for the engine-hours log (§14.11).
+
+    Pure and single-row, like ``task_issue_line`` — so the view, and any future
+    page, render a run identically.
+
+    A RUNNING run reads 'running', not a duration: its ``duration_min`` is still
+    NULL and it is not yet in the cumulative figure. Showing an elapsed time here
+    would make this list disagree with the status bar it was opened from.
+    """
+    parts = [engine_run_when(row, tz=tz)]
+    parts.append("running" if row["open"] else format_hm(row["duration_min"] or 0))
+    parts.append(_ENGINE_METHODS.get(row["method"], row["method"]))
+    parts.append(f"session {row['session_id']}" if row["session_id"] else "no session")
+    if row["notes"]:
+        parts.append(row["notes"])
+    return " · ".join(parts)

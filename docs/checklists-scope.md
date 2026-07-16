@@ -426,10 +426,23 @@ render-and-query concern over what §14 already stores.
 Raised during first-pass testing; recorded here so they are not lost, with no
 commitment to build yet:
 
-- **Dedicated engine-hours log**, reached from the cumulative-hours counter on
-  the status bar (§6.10): a view of accrued runtime — the disclosed/estimated
-  baseline (§7) first, then every run logged since, so the number on the bar can
-  be drilled into rather than merely read.
+- ~~**Dedicated engine-hours log**~~ — **BUILT, 16 July 2026** (`logbook/ui/engine_log.py`).
+  Reached by clicking the cumulative-hours counter on the status bar; Back returns
+  to the calling view, the ⚙'s rule for the ⚙'s reason (§15.5). The header
+  *reconciles* rather than restates: baseline with its §7 provenance, runs logged
+  since, then the total — which must equal the bar's figure. Shown apart because
+  §7's whole argument is that "47.3 hours that are all true is a better figure
+  than 1,847 of which 1,800 are a guess". Three things the data forced:
+  - **Ordered by `id`, not by time.** A `manual_duration` run has no timestamps at
+    all, so time is not a total order over these rows. Its when-column reads "—";
+    inventing a time would fabricate an observation (§4.1).
+  - **A running run is listed but not counted**, and says so. `duration_min` is
+    still NULL while open, so `logged_engine_minutes()` cannot see it — showing an
+    elapsed time would make the view disagree with the bar two inches below it.
+    The run count beside the hours counts the *closed* runs, for the same reason.
+  - **Soft-delete arrived with it** (§5.4) — engine runs were the only record type
+    that could not be corrected. Edit still cannot: it would need a v2→v3
+    migration for `edited`/`edited_utc`.
 - **"Log Engine Start?" prompt** after completing (or saving-and-raising) an
   engine-start checklist (I-WOBBLE): the checklist exists precisely because the
   engine is about to run, so offering to start the engine timer there closes the

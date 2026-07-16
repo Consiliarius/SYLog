@@ -230,9 +230,17 @@ class App:
 
         # CENTRE: cumulative engine hours (§6.10) — always visible now, not only
         # on the launch view — carrying their provenance note (§7) compactly.
+        #
+        # CLICKABLE: it opens the engine-hours log (§14.11), so the figure can be
+        # drilled into rather than merely read. Stays a Label, not a Button: the
+        # bar reads as status, and a button here would claim to be a control. It
+        # is packed expand=True, so the target is wide even though the bar is only
+        # one line tall.
         self._engine_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
-                                      bg=theme.BG_PANEL, font=self.font_small, anchor="center")
+                                      bg=theme.BG_PANEL, font=self.font_small,
+                                      anchor="center", cursor="hand2")
         self._engine_label.pack(side="left", expand=True, fill="x")
+        self._engine_label.bind("<Button-1>", self.show_engine_log)
 
         self._refresh_gps_indicator()
         self._refresh_backup_indicator()
@@ -453,6 +461,18 @@ class App:
         from logbook.ui import settings
         caller = self._reshow
         self._show(lambda: settings.SettingsView(self._content, self, back=caller))
+
+    def show_engine_log(self, event=None) -> None:
+        """Open the engine-hours log — the counter on the bar, drilled into (§14.11).
+
+        Same rule and same reason as the ⚙ above: the counter is on the
+        always-visible bar, so Back returns to the calling view rather than the
+        launcher, which mid-passage would force a Resume. ``_reshow`` is captured
+        BEFORE ``_show`` overwrites it.
+        """
+        from logbook.ui import engine_log
+        caller = self._reshow
+        self._show(lambda: engine_log.EngineHoursView(self._content, self, back=caller))
 
     def show_task_form(self, kind, *, checklist_run_id=None) -> None:
         from logbook.ui import tasks

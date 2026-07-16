@@ -276,6 +276,7 @@ Promoted in Draft 4 from mere provenance. Values: `auto` | `observation` | `sail
 
 - **Edit is permitted** via the viewer; sets `edited = 1` with `edited_utc`. The viewer marks edited entries.
 - **Delete is a soft delete** — `deleted`, `deleted_utc`, required `deleted_reason`. The row survives; the viewer hides it by default and can show it struck through. **Nothing is ever destroyed.**
+  - Applies to **engine runs** too, from the engine-hours log (§14.11, 16 Jul 2026). The columns and the `deleted = 0` filters were there from the start, but nothing could set them, so a mistyped run polluted cumulative hours permanently. Deleting one *does* move the cumulative figure — which §7 guards — but §7's rule is that it must never move **silently**, and a deliberate delete carrying a typed reason is the opposite of silent. **Editing an engine run is still not possible**: `engine_run` has no `edited`/`edited_utc` columns, so a v2→v3 migration would be needed to mark one honestly.
 - **Hard delete does not exist in the UI.** If a row genuinely must go, that is a job for `sqlite3` on the command line, deliberately and with effort.
 - **Edit and delete operate per row, not per group.** Correcting a mis-recorded sail plan must not destroy the position fix taken at the same moment. **This is the point of the row split (§6.7).**
 - **Every derived figure must filter `WHERE deleted = 0`.** Easy to forget in one place and produce a quietly wrong number — so **derivations go through one query layer**, never ad hoc.
@@ -466,6 +467,7 @@ Stored as JSON in `entry.sail_state`. **Accepted trade:** if sail-usage analysis
 - **No search, no filtering.** Even years of logging is a few thousand rows; scanning the session is faster than typing a query. Easy to add later if it proves wanted.
 - Edited and soft-deleted entries visibly marked. Rows sharing a `group_id` visibly grouped.
 - **Cumulative engine hours belong on the launch view, not here.** It is not a log view — it is one number that drives servicing, and it should be visible without being hunted for.
+  - *Superseded in part (§14.11, built 16 Jul 2026).* The **number** still stands alone and is not buried in this viewer — it moved to the always-visible status bar rather than the launch view, so it is readable under way. What was added is a **drill-down behind it**: clicking the counter opens the engine-hours log (baseline, runs since, total). That does not make cumulative hours a log view; it gives the one number an audit trail, which is what §7's provenance rule asks for anyway.
 
 ---
 

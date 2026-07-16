@@ -439,9 +439,48 @@ class Database:
             "SELECT * FROM engine_run WHERE open = 1 AND deleted = 0 ORDER BY id"
         ).fetchall()
 
+    def engine_runs(self, session_id=None, *, newest_first=True) -> list[sqlite3.Row]:
+        """Non-deleted engine runs — the engine-hours log (§14.11).
+
+        Ordered by ``id``, NOT by time, deliberately: a ``manual_duration`` run
+        has no ``started_utc`` at all (a duration typed in afterwards), so time is
+        not a total order over these rows. Insertion order is, and it is what the
+        export already uses.
+
+        ``session_id=None`` returns every run across all sessions, including the
+        mooring runs that have no session at all.
+        """
+        order = "DESC" if newest_first else "ASC"
+        if session_id is None:
+            return self.conn.execute(
+                f"SELECT * FROM engine_run WHERE deleted = 0 ORDER BY id {order}"
+            ).fetchall()
+        return self.conn.execute(
+            f"SELECT * FROM engine_run WHERE deleted = 0 AND session_id = ? "
+            f"ORDER BY id {order}", (session_id,)).fetchall()
+
+    def soft_delete_engine_run(self, run_id, reason: str) -> None:
+        """Withdraw a run from the cumulative figure — corrections, not erasures (§5.4).
+
+        The last record type to get this: the columns and the ``deleted = 0``
+        filters were here from the start, but nothing could ever set them, so a
+        mistyped run polluted cumulative hours permanently (§14.11).
+
+        This DOES change the cumulative figure, which §7 guards — but §7's rule is
+        that the number must never change SILENTLY. A deliberate delete carrying a
+        typed reason is the opposite of silent, and the run is still exported and
+        flagged, never erased.
+        """
+        self._soft_delete("engine_run", run_id, reason)
+
     def logged_engine_minutes(self) -> float:
         """Σ duration_min over non-deleted runs. The config baseline is added by
-        the caller at display time (§5.6); it is not stored here."""
+        the caller at display time (§5.6); it is not stored here.
+
+        An OPEN run contributes nothing: its duration_min is still NULL, so the
+        figure counts finished runs only. Any display of a run in progress must
+        therefore keep it out of the total, or it will disagree with this.
+        """
         row = self.conn.execute(
             "SELECT COALESCE(SUM(duration_min), 0.0) AS total "
             "FROM engine_run WHERE deleted = 0"
