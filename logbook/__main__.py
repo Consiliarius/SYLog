@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
     _ensure_location(db_path, cfg.backup_dir)
     d = db_mod.open_db(db_path)
     warnings = config_mod.sync_baseline(cfg, d)
+    config_mod.sync_vessel_identity(cfg, d)   # config wins, quietly (§15.4)
 
     tuning = dict(
         sails=cfg.sails,

@@ -145,6 +145,56 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(d.get_meta("engine_hours_baseline"), "1800")
         self.assertEqual(d.get_meta("engine_hours_baseline_note"), "documented")
 
+    # -- vessel reference + identity mirror (§15.2, §15.4) ---------------------
+
+    def _with_vessel(self, **fields):
+        data = json.loads(json.dumps(EXAMPLE))
+        data["vessel"].update(fields)
+        return self._config_obj(data)
+
+    def test_vessel_reference_omits_unset_fields(self):
+        cfg = self._with_vessel(length=7.9, beam=2.6, draught=None,
+                                air_draught=11.0, ssr="", callsign="MABC1")
+        ref = cfg.vessel_reference
+        self.assertEqual(ref["length"], 7.9)
+        self.assertEqual(ref["callsign"], "MABC1")
+        self.assertNotIn("draught", ref)      # null -> absent, so the display omits it
+        self.assertNotIn("ssr", ref)          # "" -> absent
+        self.assertNotIn("mmsi", ref)         # missing key -> absent
+
+    def test_vessel_reference_empty_when_nothing_configured(self):
+        # A vessel with no reference data hides both surfaces entirely (§15.2).
+        data = json.loads(json.dumps(EXAMPLE))
+        data["vessel"].pop("name", None)
+        self.assertEqual(self._config_obj(data).vessel_reference, {})
+
+    def test_sync_vessel_identity_mirrors_into_meta(self):
+        cfg = self._with_vessel(name="Kingfisher", ssr="123456",
+                                callsign="MABC1", mmsi="232001234")
+        d = self._db()
+        config.sync_vessel_identity(cfg, d)
+        self.assertEqual(d.get_meta("vessel_name"), "Kingfisher")
+        self.assertEqual(d.get_meta("vessel_ssr"), "123456")
+        self.assertEqual(d.get_meta("vessel_callsign"), "MABC1")
+        self.assertEqual(d.get_meta("vessel_mmsi"), "232001234")
+
+    def test_sync_vessel_identity_config_wins_unlike_the_baseline(self):
+        # The opposite rule to sync_baseline: a corrected callsign simply applies,
+        # with no warning and no stored value winning (§15.4).
+        d = self._db()
+        config.sync_vessel_identity(self._with_vessel(callsign="WRONG1"), d)
+        self.assertEqual(d.get_meta("vessel_callsign"), "WRONG1")
+        config.sync_vessel_identity(self._with_vessel(callsign="MABC1"), d)
+        self.assertEqual(d.get_meta("vessel_callsign"), "MABC1")   # overwritten
+
+    def test_sync_vessel_identity_clears_a_removed_field(self):
+        # meta tracks config exactly — it must not retain a value the skipper deleted.
+        d = self._db()
+        config.sync_vessel_identity(self._with_vessel(mmsi="232001234"), d)
+        self.assertEqual(d.get_meta("vessel_mmsi"), "232001234")
+        config.sync_vessel_identity(self._with_vessel(mmsi=""), d)
+        self.assertEqual(d.get_meta("vessel_mmsi"), "")
+
     def test_sync_baseline_warns_on_drift_without_overwriting(self):
         d = self._db()
         d.set_meta("engine_hours_baseline", "1800")   # already remembered

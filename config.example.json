@@ -1,6 +1,13 @@
 {
   "vessel": {
     "name": "Vessel name",
+    "length": null,
+    "beam": null,
+    "draught": null,
+    "air_draught": null,
+    "ssr": "",
+    "callsign": "",
+    "mmsi": "",
     "engine_hours_baseline": 0,
     "engine_hours_baseline_note": "none",
     "sails": [

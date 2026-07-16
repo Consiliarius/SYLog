@@ -8,8 +8,13 @@ Mirrors ``engine_hours_baseline`` into the ``meta`` table and warns if the two
 ever disagree — config can be lost or copied to another machine, and cumulative
 hours must not change silently.
 
+Also mirrors the vessel's IDENTITY into ``meta`` (§15.4), so the export never
+depends on config, which is not archived (§8). That mirror carries the OPPOSITE
+rule — config wins, quietly — because identity is not a derived figure. The two
+semantics are deliberate; see sync_vessel_identity().
+
 Build order: with the core (step 2 area).
-Spec: §7 (configuration).
+Spec: §7 (configuration), §15 (vessel reference).
 """
 
 from __future__ import annotations
@@ -26,6 +31,18 @@ _REQUIRED = (
     ("paths", "backup_dir"),
     ("vessel", "sails"),
 )
+
+# Vessel reference fields (§15.2). Dimensions are NUMBERS in metres (rendered to
+# at most 1 dp); identity fields are STRINGS — they are identifiers, not
+# quantities, so leading zeros and formatting survive. All are optional.
+VESSEL_DIMENSIONS = ("length", "beam", "draught", "air_draught")
+VESSEL_IDENTITY = ("ssr", "callsign", "mmsi")
+
+# Identity mirrored into meta so the export never reads config (§8, §15.4).
+_VESSEL_META_KEYS = {
+    "name": "vessel_name", "ssr": "vessel_ssr",
+    "callsign": "vessel_callsign", "mmsi": "vessel_mmsi",
+}
 
 
 class ConfigError(RuntimeError):
@@ -66,6 +83,23 @@ class Config:
     @property
     def engine_hours_baseline_note(self) -> str:
         return self._data["vessel"].get("engine_hours_baseline_note", "none")
+
+    @property
+    def vessel_reference(self) -> dict:
+        """Name + dimensions + identity, for the launch card and session bar (§15.3).
+
+        Unset fields (absent, ``null`` or ``""``) come back ABSENT rather than
+        empty, so a display simply omits them — and a vessel with nothing
+        configured yields ``{}``, which hides both surfaces entirely rather than
+        showing a grid of blanks.
+        """
+        vessel = self._data.get("vessel", {})
+        out: dict = {}
+        for key in ("name", *VESSEL_DIMENSIONS, *VESSEL_IDENTITY):
+            value = vessel.get(key)
+            if value is not None and value != "":
+                out[key] = value
+        return out
 
     # -- checklists (§14.4) ---------------------------------------------------
 
@@ -179,6 +213,29 @@ def sync_baseline(cfg: Config, d: db.Database) -> list[str]:
             f"value ({stored} h); keeping the stored value — cumulative hours must "
             f"not change silently")
     return warnings
+
+
+def sync_vessel_identity(cfg: Config, d: db.Database) -> None:
+    """Mirror the vessel's identity into ``meta`` (§15.4).
+
+    The export reads ``meta``, never config, because the archival artefact cannot
+    depend on a file that is not itself archived (§8) — the same pattern
+    engine-cumulative.csv already uses for the baseline.
+
+    **CONFIG WINS, quietly — deliberately the opposite of sync_baseline() above.**
+    There, ``meta`` is authoritative and drift only warns, because cumulative
+    engine hours must never change silently. That reasoning does not extend to
+    identity: it is not a derived figure, and a mistyped callsign should simply be
+    correctable. So this overwrites ``meta`` from config on every start, without a
+    warning. Two different mirror semantics live in ``meta``; the difference is
+    intentional.
+
+    A field cleared in config is mirrored as empty, so ``meta`` tracks config
+    exactly rather than retaining a value the skipper deleted.
+    """
+    reference = cfg.vessel_reference
+    for key, meta_key in _VESSEL_META_KEYS.items():
+        d.set_meta(meta_key, reference.get(key, ""))
 
 
 def _format_baseline(hours: float) -> str:
