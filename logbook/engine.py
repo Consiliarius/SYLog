@@ -35,6 +35,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import NamedTuple
 
 from logbook import db
 
@@ -160,6 +161,40 @@ def add_completed(
 def cumulative_minutes(d: db.Database, baseline_min: float = 0.0) -> float:
     """Baseline (from config, §7) + Σ non-deleted logged minutes (§5.6)."""
     return float(baseline_min) + d.logged_engine_minutes()
+
+
+class Reconciliation(NamedTuple):
+    """Cumulative engine hours, itemised — never merely totalled (§7).
+
+    ``note`` is the baseline's provenance AS STORED; put it through
+    ``render.engine_baseline_note`` to show it. It is part of the tuple because
+    §7's whole point is that the figure and its provenance travel together: a
+    caller that wants the number gets handed the caveat with it, rather than
+    having to remember to ask.
+    """
+    baseline_h: float
+    note: str
+    logged_h: float
+    total_h: float
+
+
+def reconciliation(d: db.Database) -> Reconciliation:
+    """The §7 figure in HOURS: baseline, logged since, and the sum.
+
+    From ``meta``, never config — config can be lost or copied to another
+    machine, and cumulative hours must not change silently (§7). One source, so
+    the status bar, the engine-hours view and the HTML review page cannot
+    disagree about either the number or how trustworthy it is.
+
+    Note a run in progress is NOT in ``logged_h``: ``logged_engine_minutes()``
+    sums ``duration_min``, which is still NULL while a run is open. Callers that
+    can show a running run say so themselves.
+    """
+    baseline_h = float(d.get_meta("engine_hours_baseline", "0") or 0)
+    note = d.get_meta("engine_hours_baseline_note", "none")
+    logged_h = d.logged_engine_minutes() / 60.0
+    total_h = cumulative_minutes(d, baseline_h * 60.0) / 60.0
+    return Reconciliation(baseline_h, note, logged_h, total_h)
 
 
 def _overlap_warnings(

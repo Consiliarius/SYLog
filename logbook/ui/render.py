@@ -278,6 +278,27 @@ def task_issue_line(row, *, tz: tzinfo = timezone.utc) -> str:
 
 # -- engine-hours log (§14.11) ------------------------------------------------
 
+# The baseline's provenance, spelled out (§7). NEVER omitted: a figure with no
+# provenance invites false confidence, and an estimated baseline pollutes a real
+# number with a guessed one.
+_NOTE_TEXT = {
+    "documented": "documented",
+    "estimated": "estimated — a guess, not a reading",
+    "none": "none disclosed; hours below are all logged by this tool",
+}
+
+
+def engine_baseline_note(note: str) -> str:
+    """The baseline's provenance as a skipper reads it (§7).
+
+    Pure, and here rather than in the view, so the engine-hours screen and the
+    HTML review page caveat the number identically (§14.10). An unrecognised
+    value renders verbatim rather than vanishing: a baseline whose provenance
+    went missing must still say something, never nothing.
+    """
+    return _NOTE_TEXT.get(note, note or "")
+
+
 # `method` as stored -> what a skipper reads. The stored values are internal
 # vocabulary (engine.py), never shown raw.
 _ENGINE_METHODS = {

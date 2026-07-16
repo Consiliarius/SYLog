@@ -439,11 +439,21 @@ file-picker (friction on a phone), or a local HTTP server — which §11 rules o
 A viewer only becomes an option if the directory is ever served over HTTP; it is
 not one now.
 
-**The enabling condition is already met.** Every human-string renderer added
+**The enabling condition is essentially met.** Every human-string renderer added
 since §14.10 was parked went into the pure `render` layer as it asked:
 `one_line`, `passage_summary`, `checklist_summary`, `split_label`,
 `task_issue_line`, `engine_run_line`/`engine_run_when`, `vessel_bar`,
-`format_hm`, `format_position`. There is no Tk-only string to extract.
+`format_hm`, `format_position`.
+
+*Corrected 16 July 2026, building step 2:* this section originally claimed
+**"There is no Tk-only string to extract."** That was wrong. `_NOTE_TEXT` — the
+baseline's §7 provenance, the one string §7 forbids showing the hours without —
+sat inside `engine_log.py`, which imports tkinter. `index.html` needed it, so it
+moved to `render.engine_baseline_note` per §14.10's own standing rule, and the
+Tk view now reads it from there. The reconciliation arithmetic went with it, to
+`engine.reconciliation`: the status bar, the engine-hours view and the HTML page
+now take the figure AND its caveat from one place, which is the whole of §7's
+point. Audit the claim, don't trust it — the next page may find another.
 
 **Decisions §14.10 left open, resolved here:**
 
@@ -455,6 +465,7 @@ since §14.10 was parked went into the pure `render` layer as it asked:
 | Self-contained? | **Yes — inline the CSS, no JS, no CDN, no web fonts.** It is read on a phone, possibly offline, possibly years later. (`<link>` to a sibling stylesheet *would* work over `file://` — only fetch is blocked — but inlining removes the question.) |
 | Deleted rows? | Shown, struck through and flagged — as the CSV does and the viewer does. With no JS there is no "Show deleted" toggle; `<details>` is the no-JS option if hiding is wanted. |
 | Escaping | **`html.escape` on every interpolated value, without exception.** Remarks, item labels, notes, place names and the vessel name are all free text: one `<` in a remark otherwise breaks the page. This is the single likeliest bug in the whole job. |
+| The one-line renderers, or field-by-field? | **Field-by-field** (decided 16 July 2026, building step 2). `task_issue_line` hands back `ISSUE · Starboard winch stiff · raised 14 Jul · open` — kind, description, date and status already joined with `·`. Dropped into a page that is a Tk list in a browser: the kind cannot become a badge, the date cannot become its own column, and §14.10.2's "issues distinguishable from tasks" is reduced to a leading word. So the pages lay out the row dict's fields themselves, reusing the *atomic* formatters — `format_position`, `format_hm`, `checklist_summary`, `engine_run_when`, `engine_baseline_note` — which are where the judgement actually lives. Parity is at the **row-dict** level, which is what this table's first row promises; it was never promised at the string level. |
 
 **Pages** (stable filenames, so `rclone copy` overwrites rather than accumulates):
 
@@ -465,7 +476,11 @@ since §14.10 was parked went into the pure `render` layer as it asked:
 - `session-NNN.html` — the logbook page: summary, the entries timeline, engine
   runs, checklist runs, passage split (§5.6).
 - `engine.html` — cumulative hours: baseline + provenance, then every run.
-  Mirrors `engine_log.EngineHoursView` (§14.11) — reuse `render.engine_run_line`.
+  Mirrors `engine_log.EngineHoursView` (§14.11). *An earlier draft said "reuse
+  `render.engine_run_line`"; superseded by the field-by-field decision above, so
+  a run's times, duration, method and notes land in their own columns. It shares
+  `engine.reconciliation` and `render.engine_baseline_note` with that view, which
+  is where agreement actually matters — the figure, not the punctuation.*
 
 **Build plan (proposed order, each step independently green + committable):**
 
@@ -474,10 +489,12 @@ since §14.10 was parked went into the pure `render` layer as it asked:
    `html.escape`, and one shared inline stylesheet constant. Mobile-first, light
    only (§14.10.2). Not print-friendly, and no dark theme — both struck there,
    with reasons.
-2. `tasks.html` + `index.html` from existing rows — the near-term wish, earliest
-   value, no new queries.
+2. **BUILT (16 July 2026).** `tasks.html` + `index.html` from existing rows — the
+   near-term wish, earliest value, no new queries. Confirmed: `d.sessions()`,
+   `d.task_issues_including_deleted()` and `engine.cumulative_minutes` all
+   already existed; nothing new was queried.
 3. `session-NNN.html` from `export_session`'s own row dicts.
-4. `engine.html` reusing `render.engine_run_line`.
+4. `engine.html` — the cumulative reconciliation, then every run.
 5. Wire into `export.py` beside the CSV writers; a `--no-html` escape hatch if
    generation ever proves slow on the netbook.
 6. Tests: assert escaping (a remark containing `<script>` must not execute),

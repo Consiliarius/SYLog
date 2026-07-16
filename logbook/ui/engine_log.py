@@ -26,15 +26,6 @@ from logbook import db, engine
 from logbook.ui import render, theme
 from logbook.ui.app import _big_button
 
-# The baseline's provenance, spelled out (§7). NEVER omitted: a figure with no
-# provenance invites false confidence, and an estimated baseline pollutes a real
-# number with a guessed one.
-_NOTE_TEXT = {
-    "documented": "documented",
-    "estimated": "estimated — a guess, not a reading",
-    "none": "none disclosed; hours below are all logged by this tool",
-}
-
 
 class EngineHoursView(tk.Frame):
     """Cumulative engine hours, itemised: the baseline, then every run since."""
@@ -85,18 +76,14 @@ class EngineHoursView(tk.Frame):
 
     # -- the reconciliation (§7) ----------------------------------------------
 
-    def _totals(self):
+    def _totals(self) -> engine.Reconciliation:
         """Baseline, logged and total — in hours, from ``meta``, not config.
 
-        ``meta`` is authoritative for the baseline (§7): config can be lost or
-        copied to another machine, and cumulative hours must not change silently.
-        The Settings editor deliberately cannot touch it (§15.5).
+        The arithmetic lives in ``engine.reconciliation`` so this screen and the
+        HTML review page cannot drift apart on the one figure that drives
+        servicing (§7). Kept as a method because it is what this view reads.
         """
-        baseline_h = float(self.app.d.get_meta("engine_hours_baseline", "0"))
-        note = self.app.d.get_meta("engine_hours_baseline_note", "none")
-        logged_h = self.app.d.logged_engine_minutes() / 60.0
-        total_h = engine.cumulative_minutes(self.app.d, baseline_h * 60.0) / 60.0
-        return baseline_h, note, logged_h, total_h
+        return engine.reconciliation(self.app.d)
 
     def _refresh(self) -> None:
         for child in self._header.winfo_children():
@@ -109,7 +96,7 @@ class EngineHoursView(tk.Frame):
         # figure that only three of them contribute to.
         counted = sum(1 for r in self.runs if not r["open"])
         rows = [("Baseline", f"{baseline_h:,.1f} h",
-                 _NOTE_TEXT.get(note, note), theme.FG_MUTED),
+                 render.engine_baseline_note(note), theme.FG_MUTED),
                 ("Logged since", f"{logged_h:,.1f} h",
                  f"{counted} run{'' if counted == 1 else 's'}", theme.FG)]
         for r, (label, value, note_text, colour) in enumerate(rows):
