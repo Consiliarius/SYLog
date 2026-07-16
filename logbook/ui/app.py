@@ -663,12 +663,14 @@ def _big_button(parent, text, command, *, width=0):
 
 
 # The launch card's groups (§15.3). Full words here — space is free on the launch
-# view, unlike the one-line session bar, which must abbreviate. The vessel's name
-# is not repeated: the launch title already carries it.
+# view, unlike the one-line session bar, which must abbreviate. The name is
+# repeated deliberately, even though the title above already carries it, so both
+# groups run to four rows and the card balances.
 _VESSEL_CARD_GROUPS = (
     ("Dimensions", (("length", "Length"), ("beam", "Beam"),
                     ("draught", "Draught"), ("air_draught", "Air draught"))),
-    ("Identity", (("ssr", "SSR"), ("callsign", "Callsign"), ("mmsi", "MMSI"))),
+    ("Identity", (("name", "Name"), ("ssr", "SSR"), ("callsign", "Callsign"),
+                  ("mmsi", "MMSI"))),
 )
 
 

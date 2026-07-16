@@ -1,6 +1,13 @@
 # Vessel Logbook Tool — §15 Vessel Reference & Settings
 
-**Status:** Design settled — build in progress
+**Status:** Build in progress. **Done:** config accessors + the `meta` identity
+mirror; the four identity columns in the summary CSV; the launch card, the slim
+session bar and the Radio hint; the Settings shell (⚙, return-to-caller nav,
+atomic write, scalars) and the standing-locations list.
+**Remaining: the reusable sails record-list** (§15.5) — join it to the
+`_CUSTOM_SECTIONS` hook in `logbook/ui/settings.py`, alongside
+`_LocationsSection`, and build it as a record list with a *pluggable child-list
+editor* so the deferred checklist editor is a drop-in rather than a second build.
 **Date:** 16 July 2026
 
 Extends `logbook-scope.md`. Numbered §15 so it slots in without renumbering the
@@ -74,7 +81,10 @@ lowers to make room). Two groups, full words, space being free there:
 
 | Dimensions | Identity |
 |---|---|
-| Length · Beam · Draught · Air draught | SSR · Callsign · MMSI |
+| Length · Beam · Draught · Air draught | Name · SSR · Callsign · MMSI |
+
+The name is repeated in Identity, even though the title above already carries it,
+so both groups run to four rows and the card balances.
 
 **Session view — a slim `S/Y:` bar along the top**, mirroring the status bar at
 the bottom (same `BG_PANEL`, `font_small`, one line ≈ 20 px; the rolling log

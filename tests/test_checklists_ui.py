@@ -66,7 +66,12 @@ class ChecklistUITestCase(unittest.TestCase):
         self.app.vessel = {"name": "Kingfisher", "length": 7.9, "draught": 0.9,
                            "mmsi": "232001234"}
         self.app.show_launch()
-        self.assertIsNotNone(self.app.views.current._card)   # card on the launcher
+        card = self.app.views.current._card
+        self.assertIsNotNone(card)                           # card on the launcher
+        # The name repeats in Identity, so both groups run to four rows (§15.3).
+        texts = [w.cget("text") for w in card.winfo_children() if isinstance(w, tk.Label)]
+        self.assertIn("Name", texts)
+        self.assertIn("Kingfisher", texts)
 
         session = self._open_session()
         self.app.show_session(session)
