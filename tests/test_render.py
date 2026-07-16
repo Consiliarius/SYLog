@@ -173,12 +173,12 @@ class RenderTestCase(unittest.TestCase):
             "mmsi": "232001234"})
         self.assertEqual(
             line,
-            "S/Y: Kingfisher · LOA: 7.9m · Beam: 2.6m · dft: 0.9m · AD: 11m · "
+            "S/Y: Kingfisher · LOA: 7.9m · Beam: 2.6m · Dft: 0.9m · AD: 11m · "
             "SSR: 123456 · CS: MABC1 · MMSI: 232001234")
 
     def test_vessel_bar_omits_unset_and_hides_when_empty(self):
         line = render.vessel_bar({"name": "Kingfisher", "draught": 0.9})
-        self.assertEqual(line, "S/Y: Kingfisher · dft: 0.9m")
+        self.assertEqual(line, "S/Y: Kingfisher · Dft: 0.9m")
         self.assertEqual(render.vessel_bar({}), "")      # nothing configured -> no bar
         self.assertEqual(render.vessel_bar(None), "")
 

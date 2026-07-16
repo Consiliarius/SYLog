@@ -74,7 +74,7 @@ class ChecklistUITestCase(unittest.TestCase):
         self.assertIsInstance(view, SessionView)
         text = view._vessel_label.cget("text")               # slim bar under way
         self.assertIn("S/Y: Kingfisher", text)
-        self.assertIn("dft: 0.9m", text)
+        self.assertIn("Dft: 0.9m", text)
         self.assertIn("MMSI: 232001234", text)
 
     def test_both_vessel_surfaces_hide_when_nothing_configured(self):

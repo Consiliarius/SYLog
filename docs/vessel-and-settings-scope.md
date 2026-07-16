@@ -82,10 +82,10 @@ loses about one row). Shown **only** on the logging view, where it is needed and
 where nothing else can reach.
 
 ```
-S/Y: Kingfisher · LOA: 7.9m · Beam: 2.6m · dft: 0.9m · AD: 11m · SSR: 123456 · CS: MABC1 · MMSI: 232001234
+S/Y: Kingfisher · LOA: 7.9m · Beam: 2.6m · Dft: 0.9m · AD: 11m · SSR: 123456 · CS: MABC1 · MMSI: 232001234
 ```
 
-Labels are fixed and abbreviated: `S/Y:` `LOA:` `Beam:` `dft:` `AD:` `SSR:` `CS:`
+Labels are fixed and abbreviated: `S/Y:` `LOA:` `Beam:` `Dft:` `AD:` `SSR:` `CS:`
 `MMSI:`. **Measured** at `SIZE_SMALL`:
 
 | Line | Width | 800 floor (784 budget) | Netbook (1008) |

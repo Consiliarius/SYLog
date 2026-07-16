@@ -216,7 +216,7 @@ def checklist_summary(title: str, items_json: str | None) -> str:
 # Abbreviation is load-bearing, not cosmetic: the verbose form measured 1113 px
 # against a 1008 px budget on the netbook — it does not fit.
 _VESSEL_BAR_FIELDS = (
-    ("name", "S/Y"), ("length", "LOA"), ("beam", "Beam"), ("draught", "dft"),
+    ("name", "S/Y"), ("length", "LOA"), ("beam", "Beam"), ("draught", "Dft"),
     ("air_draught", "AD"), ("ssr", "SSR"), ("callsign", "CS"), ("mmsi", "MMSI"),
 )
 _VESSEL_DIMENSIONS = frozenset(("length", "beam", "draught", "air_draught"))
@@ -244,7 +244,7 @@ def format_vessel_value(key: str, value) -> str:
 def vessel_bar(reference) -> str:
     """The slim one-line vessel reference carried on the logging view (§15.3):
 
-        S/Y: Kingfisher · LOA: 7.9m · dft: 0.9m · CS: MABC1 · MMSI: 232001234
+        S/Y: Kingfisher · LOA: 7.9m · Dft: 0.9m · CS: MABC1 · MMSI: 232001234
 
     Unset fields are omitted; nothing configured returns '' so the bar hides
     entirely. Pure and single-source, so the bar, and any future page, agree.
