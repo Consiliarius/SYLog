@@ -273,6 +273,30 @@ class AppShellTestCase(unittest.TestCase):
         self.assertIsNone(self.app.clock_warning)                         # self-cleared...
         self.assertEqual(self.app._clock_label.cget("text"), "")          # ...bar is clear again
 
+    # -- the status bar must survive every view (§10.3) -------------------------
+
+    def test_status_bar_is_packed_before_content_so_it_cannot_be_squeezed(self):
+        # The bar carries the GPS fix, the clock warning and the backup status —
+        # it must never be the widget that vanishes. Packed AFTER the content, any
+        # view taller than the window pushed it clean off the screen (the session
+        # view did exactly that: its log Text asked for Tk's default 24 lines).
+        slaves = self.app.root.pack_slaves()
+        self.assertLess(slaves.index(self.app._bar), slaves.index(self.app._content))
+
+        # The bar reserves its height at the bottom; the content expands into the
+        # rest. That, not any view's size, is what guarantees the bar survives.
+        self.assertEqual(self.app._bar.pack_info()["side"], "bottom")
+        self.assertEqual(str(self.app._content.pack_info()["expand"]), "1")
+
+    def test_rolling_log_does_not_demand_the_whole_window(self):
+        # A Text with no height= asks for Tk's default 24 lines (616 px) — more
+        # than the whole design floor, which is what squeezed the bar off. It
+        # fills via expand, so its REQUEST must stay modest.
+        self.d.create_session(opened_utc="2026-07-16T08:00:00Z")
+        self.app.show_session(self.d.open_session())
+        self.app.root.update_idletasks()
+        self.assertLess(self.app.views.current._log.winfo_reqheight(), theme.MIN_H)
+
     def test_two_open_runs_disable_engine_button(self):
         with self.d.conn:
             self.d.conn.execute(

@@ -188,10 +188,16 @@ class App:
         self.root.bind("<F2>", self.toggle_theme)
 
     def _build_chrome(self) -> None:
-        self._content = tk.Frame(self.root, bg=theme.BG)
-        self._content.pack(side="top", fill="both", expand=True)
         self._bar = tk.Frame(self.root, bg=theme.BG_PANEL)
+        self._content = tk.Frame(self.root, bg=theme.BG)
+        # Pack the BAR FIRST so it reserves its height; the content then expands
+        # into whatever is left. Packed the other way round, any view whose
+        # natural height exceeds the window pushes the bar clean off the screen —
+        # which is what happened to the session view (its log Text asked for Tk's
+        # default 24 lines). The bar carries the GPS fix, the clock warning and
+        # the backup status: it must never be the thing that vanishes (§10.3).
         self._bar.pack(side="bottom", fill="x")
+        self._content.pack(side="top", fill="both", expand=True)
 
         # LEFT: system date + local time, then the current GPS position.
         self._where_label = tk.Label(self._bar, text="", fg=theme.FG_MUTED,
@@ -1060,8 +1066,11 @@ class SessionView(tk.Frame):
 
         # Display-only, dense, newest at top. Rebuilding from the top means there
         # is no auto-scroll to fight a reader who has scrolled up (§6.1).
+        # `height` is set so the widget's REQUEST stays modest (~12 rows, §6.1);
+        # it still fills whatever it is given, via expand. Left unset, Tk asks for
+        # 24 lines and this view's natural height exceeds the window.
         self._log = tk.Text(self, bg=theme.BG_PANEL, fg=theme.FG, font=self.app.font_small,
-                            wrap="none", bd=0, highlightthickness=0,
+                            wrap="none", bd=0, highlightthickness=0, height=12,
                             padx=theme.PAD, pady=theme.PAD, spacing1=2, spacing3=2)
         self._log.pack(side="top", fill="both", expand=True)
         self._log.configure(state="disabled")
