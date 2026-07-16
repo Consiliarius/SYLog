@@ -489,6 +489,70 @@ since §14.10 was parked went into the pure `render` layer as it asked:
 tool. This remains additive, not a rewrite ([[architecture]]: the core is
 UI-agnostic, so a web *input* path stays a separate, further-off question).
 
+---
+
+### 14.10.2 What it looks like to the reader
+
+*The mechanism above says nothing about the person §14.10 says this is for. This
+section is the requirement; §14.10.1 is only how it gets built.*
+
+**The reader.** One person — the skipper — on a **phone**, ashore or at the pub,
+one-handed, possibly in daylight, possibly with no signal, possibly months after
+the passage. **Not the netbook.** So `theme.py` does not apply: its palette and
+its 36 px touch targets are a 1024 × 600 resistive screen at a chart table, and
+carrying them onto a phone would be cargo-culting the wrong constraints.
+
+**Each page answers one question, and leads with the answer.**
+
+| Page | The question it answers at a glance |
+|---|---|
+| `tasks.html` | **"What still needs doing on the boat?"** Open items first, newest first, issues distinguishable from tasks. Done items are subordinate but present — they are the evidence something *was* dealt with. `<details>`, collapsed, is the no-JS way to keep them without burying the open ones. |
+| `index.html` | **"What state is the boat in?"** Vessel identity, cumulative engine hours *with their provenance*, how many items are open, then the session list newest-first. |
+| `session-NNN.html` | **"What happened on that passage?"** The summary first — departure and arrival, distance, time under way vs stationary (§5.6) — then the timeline beneath it. Not a CSV dump with a header. |
+| `engine.html` | **"How many hours, and how honest is that number?"** The §7 reconciliation, as `engine_log.EngineHoursView` already does it: baseline + provenance, logged since, total. |
+
+**Rules carried over from the tool's own — these are not new decisions, and
+dropping them would make the page say something the tool refuses to say:**
+
+- **§6.10:** edited entries visibly marked; soft-deleted entries struck through,
+  not omitted; rows sharing a `group_id` visibly grouped. All three must survive.
+- **§7:** cumulative engine hours **never** appear without their provenance. A
+  bare number invites false confidence — on a phone as much as on the bar.
+- **§4.1 / §8:** an observed fix and a typed position must stay distinguishable.
+  The provenance columns exist precisely so this cannot be lost; do not render a
+  back-dated typed position as though the boat was measured there.
+- **§8:** units in the labels. *"A CSV whose columns require documentation is not
+  archival"* — a review page needing a key is worse.
+- **§15.4:** identity comes from `meta`, never from config.
+- **Ordering** mirrors the tool: lists newest-first (as the viewer, the worklist
+  and the checklist history all are); entries within a session in `id` order.
+
+**Deliberately absent:**
+
+- **No search, no filter.** §6.10's reasoning applies verbatim — a few thousand
+  rows is faster to scan than to query — and with no JS it is not on offer anyway.
+- **No editing, no forms, no links off-box.** Read-only means read-only.
+- **Navigation depth ≤ 2.** `index.html` reaches everything; every page links home.
+  Nothing is more than one tap from the dashboard.
+
+**Presentation:**
+
+- **Readable on a phone without pinch-zoom.** Fluid width, ~16 px base, no fixed
+  pixel layouts. The body never scrolls horizontally; a wide table scrolls inside
+  its own container.
+- **Light and dark via `prefers-color-scheme`** — free, no JS, and the tool's own
+  §3.2 night-vision reasoning applies to a phone on a boat at night just as it
+  does to the chart table. *(An earlier draft of §14.10.1 said "light-only" and
+  "print-friendly". Both were asserted without a reason: nobody asked to print
+  it, and CSV is the archival record if anyone ever does. Struck.)*
+
+**The one genuinely open question, for whoever builds it:** the entries timeline
+on a narrow screen. It is the widest thing here — time, position, sails, weather,
+remarks, provenance — and a phone is ~380 px. Either it scrolls horizontally in
+its own container (keeps the tabular reading, costs one-handedness), or each
+entry becomes a stacked card (reads well on a phone, loses column comparison).
+Worth deciding against a real session's data rather than in the abstract.
+
 ## 14.11 Future development backlog (flagged, not built)
 
 Raised during first-pass testing; recorded here so they are not lost, with no
