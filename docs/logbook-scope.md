@@ -44,7 +44,7 @@ No hard real-time requirement exists. Latency tolerance is seconds. A crash duri
 | OS | Debian-based, 64-bit Linux |
 | Architecture | amd64 primary; **arm64 (Raspberry Pi) a possible future target** |
 | Screen | **Design floor: 800 × 480.** Covers a netbook (1024 × 600) and an official Pi 7in touchscreen (800 × 480). |
-| Input | **Touch is a target.** Finger-sized targets (≥ 44 px), no reliance on hover or right-click. **A hardware keyboard is assumed available**, so no on-screen keyboard is built. |
+| Input | **Touch is a target.** Finger-sized targets (≥ 36 px — revised down from 44 after netbook testing showed smaller buttons poke fine), no reliance on hover or right-click. **A hardware keyboard is assumed available**, so no on-screen keyboard is built. |
 | Dependencies | Python 3 standard library + Tkinter only. **No compiled dependencies.** Identical on amd64 and arm64. |
 | Configuration | No hard-coded paths or thresholds. Intervals, gates, tolerances, sail wardrobe and paths live in `config.json`. |
 

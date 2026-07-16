@@ -68,7 +68,8 @@ SIZE_SMALL = 12
 SIZE_LARGE = 22
 
 # Sizing (pixels)
-TOUCH_MIN = 44          # minimum touch target (invariant 10)
+TOUCH_MIN = 36          # minimum touch target — revised down from 44 after
+                        # netbook testing showed smaller buttons poke fine (§2.1)
 LOG_ROW = 20            # rolling-log row height
 PAD = 8
 

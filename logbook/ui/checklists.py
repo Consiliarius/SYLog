@@ -122,6 +122,9 @@ class _ChecklistItemRow:
 
         content = tk.Frame(self.frame, bg=theme.BG)
         content.pack(fill="x", anchor="w")
+        # Fix the text column's width so the note/issue column starts at the same
+        # x on every item, whatever the descriptor length — no ragged note buttons.
+        content.columnconfigure(1, minsize=_TEXT_W)
 
         # col 0: the tickbox, top-aligned across the two text rows.
         self._box = _TickBox(content, self.checked, fonts["title"])
@@ -243,11 +246,11 @@ class ChecklistRunView(tk.Frame):
         # Save & raise issues right (progress) — compact, for a lighter bar.
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
-        _big_button(footer, "Cancel", self._cancel, compact=True).pack(
+        _big_button(footer, "Cancel", self._cancel).pack(
             side="left", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Save & raise issues", self._save_and_raise, compact=True).pack(
+        _big_button(footer, "Save & raise issues", self._save_and_raise).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Save", self._save, compact=True).pack(
+        _big_button(footer, "Save", self._save).pack(
             side="right", padx=(theme.PAD, 0), pady=theme.PAD)
         tk.Frame(self, bg=theme.FG_MUTED, height=1).pack(side="bottom", fill="x")
 
