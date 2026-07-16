@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> None:
         sails=cfg.sails,
         checklists=cfg.checklists,
         vessel_name=cfg.vessel_name,
+        vessel=cfg.vessel_reference,
         locations=cfg.locations,
         backdate_tolerance_sec=cfg.backdate_tolerance_sec,
         autolog_interval_min=cfg.autolog_interval_min,

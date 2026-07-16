@@ -210,6 +210,54 @@ def checklist_summary(title: str, items_json: str | None) -> str:
     return summary
 
 
+# -- vessel reference (§15) ---------------------------------------------------
+
+# The slim session bar's fields and their fixed abbreviations, in order (§15.3).
+# Abbreviation is load-bearing, not cosmetic: the verbose form measured 1113 px
+# against a 1008 px budget on the netbook — it does not fit.
+_VESSEL_BAR_FIELDS = (
+    ("name", "S/Y"), ("length", "LOA"), ("beam", "Beam"), ("draught", "dft"),
+    ("air_draught", "AD"), ("ssr", "SSR"), ("callsign", "CS"), ("mmsi", "MMSI"),
+)
+_VESSEL_DIMENSIONS = frozenset(("length", "beam", "draught", "air_draught"))
+
+
+def format_metres(value) -> str:
+    """A dimension in metres to at most 1 dp: 7.9 -> '7.9m'; 8 or 8.0 -> '8m'.
+
+    ``:g`` drops a trailing '.0' so a whole number reads naturally — already the
+    idiom for log_nm and the engine baseline. Tolerant of a hand-edited config: a
+    non-numeric leftover renders verbatim rather than raising, because config is
+    user-editable and must never crash a display path (§15.2).
+    """
+    try:
+        return f"{round(float(value), 1):g}m"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_vessel_value(key: str, value) -> str:
+    """One reference field: dimensions in metres, identity verbatim."""
+    return format_metres(value) if key in _VESSEL_DIMENSIONS else str(value)
+
+
+def vessel_bar(reference) -> str:
+    """The slim one-line vessel reference carried on the logging view (§15.3):
+
+        S/Y: Kingfisher · LOA: 7.9m · dft: 0.9m · CS: MABC1 · MMSI: 232001234
+
+    Unset fields are omitted; nothing configured returns '' so the bar hides
+    entirely. Pure and single-source, so the bar, and any future page, agree.
+    """
+    parts = []
+    for key, label in _VESSEL_BAR_FIELDS:
+        value = (reference or {}).get(key)
+        if value is None or value == "":
+            continue
+        parts.append(f"{label}: {format_vessel_value(key, value)}")
+    return " · ".join(parts)
+
+
 def task_issue_line(row, *, tz: tzinfo = timezone.utc) -> str:
     """One readable line for a task or issue in the Tasks & Issues view (§14.6):
     KIND · description · when raised · open / done. Pure and single-row, so the

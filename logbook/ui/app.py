@@ -95,6 +95,7 @@ class App:
         sails: list[dict] | None = None,
         checklists: list[dict] | None = None,
         vessel_name: str = "",
+        vessel: dict | None = None,
         locations: list[str] | None = None,
         backdate_tolerance_sec: float = 60.0,
         autolog_interval_min: float = 30.0,
@@ -112,6 +113,7 @@ class App:
         self.sails = sails
         self.checklists = checklists or []
         self.vessel_name = vessel_name
+        self.vessel = vessel or {}      # reference data: the card and the bar (§15.3)
         self.locations = locations or []
         self.db_path = db_path
         self.backup_dir = backup_dir
@@ -624,6 +626,52 @@ def _big_button(parent, text, command, *, width=0):
     return btn
 
 
+# The launch card's groups (§15.3). Full words here — space is free on the launch
+# view, unlike the one-line session bar, which must abbreviate. The vessel's name
+# is not repeated: the launch title already carries it.
+_VESSEL_CARD_GROUPS = (
+    ("Dimensions", (("length", "Length"), ("beam", "Beam"),
+                    ("draught", "Draught"), ("air_draught", "Air draught"))),
+    ("Identity", (("ssr", "SSR"), ("callsign", "Callsign"), ("mmsi", "MMSI"))),
+)
+
+
+def _vessel_card(parent, app):
+    """The launch view's vessel reference card — two groups side by side.
+
+    Returns None when nothing is configured, so the launcher simply has no card
+    rather than an empty frame or a grid of blanks (§15.2).
+    """
+    reference = app.vessel or {}
+    groups = []
+    for heading, fields in _VESSEL_CARD_GROUPS:
+        rows = [(label, render.format_vessel_value(key, reference[key]))
+                for key, label in fields if reference.get(key) not in (None, "")]
+        if rows:
+            groups.append((heading, rows))
+    if not groups:
+        return None
+
+    card = tk.Frame(parent, bg=theme.BG_PANEL, padx=theme.PAD * 2, pady=theme.PAD,
+                    highlightthickness=1,
+                    highlightbackground=theme.mix(theme.BG_PANEL, theme.FG, 0.20))
+    for index, (heading, rows) in enumerate(groups):
+        col = index * 3                     # label, value, then a spacer column
+        tk.Label(card, text=heading, bg=theme.BG_PANEL, fg=theme.FG,
+                 font=app.font_small).grid(row=0, column=col, columnspan=2,
+                                           sticky="w", pady=(0, 4))
+        for row_index, (label, value) in enumerate(rows, start=1):
+            tk.Label(card, text=label, bg=theme.BG_PANEL, fg=theme.FG_MUTED,
+                     font=app.font_small).grid(row=row_index, column=col,
+                                               sticky="w", padx=(0, theme.PAD))
+            tk.Label(card, text=value, bg=theme.BG_PANEL, fg=theme.FG,
+                     font=app.font_base).grid(row=row_index, column=col + 1,
+                                              sticky="w")
+        if index < len(groups) - 1:
+            card.columnconfigure(col + 2, minsize=theme.PAD * 5)
+    return card
+
+
 def _hm(minutes: float) -> str:
     total = int(minutes)
     return f"{total // 60:02d}:{total % 60:02d}"
@@ -767,7 +815,14 @@ class LaunchView(tk.Frame):
             title += f":  {self.app.vessel_name}"
         self._title = tk.Label(self, text=title, bg=theme.BG, fg=theme.FG,
                                font=self.app.font_large)
-        self._title.pack(pady=(theme.PAD * 4, theme.PAD))
+        self._title.pack(pady=(theme.PAD * 3, theme.PAD))
+
+        # Reference data for the crew, above the buttons (§15.3). Absent entirely
+        # when nothing is configured, which is why the buttons' own padding does
+        # not assume it.
+        self._card = _vessel_card(self, self.app)
+        if self._card is not None:
+            self._card.pack(pady=(0, theme.PAD))
 
         # Action buttons, a 2×3 grid (§14.9). Start Session and Engine keep their
         # top-row positions with a button-sized gap between them (column 1 left
@@ -899,6 +954,20 @@ class SessionView(tk.Frame):
         self.refresh_log()
 
     def _build(self) -> None:
+        # A slim vessel reference along the top, mirroring the status bar at the
+        # bottom (§15.3). It lives HERE and not only on the launch view because
+        # the launch view is unreachable during a passage — and MMSI, callsign,
+        # draught and air draught are wanted precisely while under way. Hidden
+        # entirely when nothing is configured.
+        line = render.vessel_bar(self.app.vessel)
+        if line:
+            bar0 = tk.Frame(self, bg=theme.BG_PANEL)
+            bar0.pack(side="top", fill="x")
+            self._vessel_label = tk.Label(bar0, text=line, bg=theme.BG_PANEL,
+                                          fg=theme.FG_MUTED, font=self.app.font_small,
+                                          anchor="w")
+            self._vessel_label.pack(side="left", padx=theme.PAD, pady=2)
+
         # Row 1: two-state controls, state derived from the database (invariant 3).
         bar1 = tk.Frame(self, bg=theme.BG_PANEL)
         bar1.pack(side="top", fill="x")

@@ -323,6 +323,19 @@ class SailPlan(_Group):
         return {"sail_state": json.dumps(state)}   # {} means recorded as no sail set
 
 
+def _own_station_hint(app) -> str:
+    """'This vessel: Kingfisher · CS: MABC1 · MMSI: 232001234' — or '' if neither
+    is configured, so the line simply does not appear (§15.3)."""
+    vessel = getattr(app, "vessel", None) or {}
+    parts = [f"{label}: {vessel[key]}"
+             for key, label in (("callsign", "CS"), ("mmsi", "MMSI"))
+             if vessel.get(key)]
+    if not parts:
+        return ""
+    name = vessel.get("name")
+    return "This vessel: " + " · ".join(([name] if name else []) + parts)
+
+
 class RadioGroup(_Group):
     title = "Radio"
     category = "radio"
@@ -338,6 +351,16 @@ class RadioGroup(_Group):
         self._label(box, "Message").grid(row=2, column=0, sticky="ne", pady=2)
         self.message = _text_box(self.app, box, height=4, width=42)
         self.message.grid(row=2, column=1, padx=theme.PAD, sticky="w", pady=2)
+
+        # Your OWN callsign and MMSI, as greyed hint text (§15.3). Making a radio
+        # call is the likeliest moment to need them, and no other surface can
+        # serve it: this form fills the window, so leaving to look them up would
+        # discard what has been typed. Hint text only — never pre-filled into a
+        # field, which would put our own identity where the CALLER's belongs.
+        own = _own_station_hint(self.app)
+        if own:
+            self._label(box, own).grid(row=3, column=1, sticky="w",
+                                       padx=theme.PAD, pady=(2, 0))
         return box
 
     def collect(self) -> dict:

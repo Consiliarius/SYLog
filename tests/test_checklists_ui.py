@@ -59,6 +59,43 @@ class ChecklistUITestCase(unittest.TestCase):
         self.assertIn("Simple Yacht Log", title)
         self.assertIn("Kingfisher", title)
 
+    # -- vessel reference surfaces (§15.3) ------------------------------------
+
+    def test_launch_card_and_session_bar_show_the_vessel(self):
+        from logbook.ui.app import SessionView
+        self.app.vessel = {"name": "Kingfisher", "length": 7.9, "draught": 0.9,
+                           "mmsi": "232001234"}
+        self.app.show_launch()
+        self.assertIsNotNone(self.app.views.current._card)   # card on the launcher
+
+        session = self._open_session()
+        self.app.show_session(session)
+        view = self.app.views.current
+        self.assertIsInstance(view, SessionView)
+        text = view._vessel_label.cget("text")               # slim bar under way
+        self.assertIn("S/Y: Kingfisher", text)
+        self.assertIn("dft: 0.9m", text)
+        self.assertIn("MMSI: 232001234", text)
+
+    def test_both_vessel_surfaces_hide_when_nothing_configured(self):
+        self.app.vessel = {}
+        self.app.show_launch()
+        self.assertIsNone(self.app.views.current._card)      # no empty card
+        self.app.show_session(self._open_session())
+        # no bar built at all, rather than an empty grey strip
+        self.assertFalse(hasattr(self.app.views.current, "_vessel_label"))
+
+    def test_radio_form_hints_own_callsign_and_mmsi(self):
+        from logbook.ui.forms import _own_station_hint
+        self.app.vessel = {"name": "Kingfisher", "callsign": "MABC1",
+                           "mmsi": "232001234"}
+        hint = _own_station_hint(self.app)
+        self.assertIn("Kingfisher", hint)
+        self.assertIn("CS: MABC1", hint)
+        self.assertIn("MMSI: 232001234", hint)
+        self.app.vessel = {"name": "Kingfisher"}             # no radio identity
+        self.assertEqual(_own_station_hint(self.app), "")
+
     def test_picker_lists_configured_checklists(self):
         from logbook.ui.checklists import ChecklistPickerView, ChecklistRunView
         self.app.show_checklists()

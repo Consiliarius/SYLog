@@ -151,6 +151,37 @@ class RenderTestCase(unittest.TestCase):
         self.assertIn("TASK", done)
         self.assertIn("Completed", done)
 
+    # -- vessel reference (§15) ------------------------------------------------
+
+    def test_format_metres_drops_a_trailing_zero(self):
+        self.assertEqual(render.format_metres(7.9), "7.9m")
+        self.assertEqual(render.format_metres(8), "8m")      # "8m would also be accepted"
+        self.assertEqual(render.format_metres(8.0), "8m")
+        self.assertEqual(render.format_metres(11.0), "11m")
+
+    def test_format_metres_rounds_to_one_decimal(self):
+        self.assertEqual(render.format_metres(2.64), "2.6m")
+
+    def test_format_metres_tolerates_a_hand_edited_config(self):
+        # config is user-editable; a non-numeric leftover must not crash a display.
+        self.assertEqual(render.format_metres("26 ft"), "26 ft")
+
+    def test_vessel_bar_full_line(self):
+        line = render.vessel_bar({
+            "name": "Kingfisher", "length": 7.9, "beam": 2.6, "draught": 0.9,
+            "air_draught": 11.0, "ssr": "123456", "callsign": "MABC1",
+            "mmsi": "232001234"})
+        self.assertEqual(
+            line,
+            "S/Y: Kingfisher · LOA: 7.9m · Beam: 2.6m · dft: 0.9m · AD: 11m · "
+            "SSR: 123456 · CS: MABC1 · MMSI: 232001234")
+
+    def test_vessel_bar_omits_unset_and_hides_when_empty(self):
+        line = render.vessel_bar({"name": "Kingfisher", "draught": 0.9})
+        self.assertEqual(line, "S/Y: Kingfisher · dft: 0.9m")
+        self.assertEqual(render.vessel_bar({}), "")      # nothing configured -> no bar
+        self.assertEqual(render.vessel_bar(None), "")
+
     def test_task_issue_line_open_and_done(self):
         i = self.d.insert_task_issue(kind="issue", source="manual",
                                      description="Bilge float sticky",
