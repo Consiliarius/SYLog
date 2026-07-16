@@ -95,10 +95,16 @@ class _TickBox(tk.Canvas):
         self._draw()
 
 
+# A fixed text-column width (px) so the note/issue field sits a set distance from
+# the tickbox — not pushed to the far right of a fullscreen window — and each item
+# stays two lines (title + descriptor) instead of three (second-pass feedback).
+_TEXT_W = 400
+
+
 class _ChecklistItemRow:
-    """One item as a self-contained block (first-pass feedback §2–§4): a scalable
-    tickbox and a bold title on one line, an italic descriptor beneath, and an
-    on-demand note/issue field kept with the item, closed off by a divider.
+    """One item on a single grid row: a scalable tickbox, the title over its
+    italic descriptor in a fixed-width column, and the on-demand note/issue field
+    beside them (not below), so the list stays compact and reads top-to-bottom.
 
     The note field doubles as the issue field: 'Save & raise issues' turns every
     filled note into a linked issue, so a problem seen at an item is typed once.
@@ -112,27 +118,31 @@ class _ChecklistItemRow:
         self._note_font = fonts["note"]
 
         self.frame = tk.Frame(parent, bg=theme.BG)
-        self.frame.pack(fill="x", anchor="w", pady=(2, 0))
+        self.frame.pack(fill="x", anchor="w", pady=(3, 0))
 
-        top = tk.Frame(self.frame, bg=theme.BG)
-        top.pack(fill="x", anchor="w")
-        self._box = _TickBox(top, self.checked, fonts["title"])
-        self._box.pack(side="left", anchor="n", padx=(0, theme.PAD))
-        title_lbl = tk.Label(top, text=title, bg=theme.BG, fg=theme.FG,
+        content = tk.Frame(self.frame, bg=theme.BG)
+        content.pack(fill="x", anchor="w")
+
+        # col 0: the tickbox, top-aligned across the two text rows.
+        self._box = _TickBox(content, self.checked, fonts["title"])
+        self._box.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, theme.PAD))
+
+        # col 1: title over descriptor, bounded to a fixed width.
+        title_lbl = tk.Label(content, text=title, bg=theme.BG, fg=theme.FG,
                              font=fonts["title"], anchor="w", justify="left",
-                             cursor="hand2")
-        title_lbl.pack(side="left", anchor="w")
+                             wraplength=_TEXT_W, cursor="hand2")
+        title_lbl.grid(row=0, column=1, sticky="w")
         title_lbl.bind("<Button-1>", self._box.toggle)   # a bigger tap target
-
-        indent = self._box.winfo_reqwidth() + theme.PAD
         if descriptor:
-            tk.Label(self.frame, text=descriptor, bg=theme.BG, fg=theme.FG_MUTED,
-                     font=fonts["desc"], wraplength=theme.DEFAULT_W - 160,
-                     justify="left", anchor="w").pack(fill="x", anchor="w",
-                                                      padx=(indent, 0))
+            tk.Label(content, text=descriptor, bg=theme.BG, fg=theme.FG_MUTED,
+                     font=fonts["desc"], wraplength=_TEXT_W, justify="left",
+                     anchor="w").grid(row=1, column=1, sticky="w")
 
-        self._note_area = tk.Frame(self.frame, bg=theme.BG)
-        self._note_area.pack(fill="x", anchor="w", padx=(indent, 0), pady=(2, 0))
+        # col 2: the note/issue affordance, a fixed distance to the right of the
+        # text — no column weight, so it never drifts to the screen edge.
+        self._note_area = tk.Frame(content, bg=theme.BG)
+        self._note_area.grid(row=0, column=2, rowspan=2, sticky="nw",
+                             padx=(theme.PAD * 2, 0))
         self._note_btn = tk.Button(self._note_area, text="Add note/issue",
                                    command=self._reveal, bg=theme.BG_BUTTON,
                                    fg=theme.FG_MUTED, bd=0, highlightthickness=0,
@@ -141,16 +151,16 @@ class _ChecklistItemRow:
         if item.get("note"):
             self._reveal()
         else:
-            self._note_btn.pack(anchor="w")
+            self._note_btn.pack(anchor="nw")
 
         tk.Frame(self.frame, bg=theme.BG_PANEL, height=1).pack(
-            fill="x", pady=(theme.PAD, 0))
+            fill="x", pady=(theme.PAD - 2, 0))
 
     def _reveal(self):
         self._note_btn.pack_forget()
         # A wrapping box that grows downward as it fills, rather than a one-line
         # field text scrolls out of (first-pass feedback §4).
-        self._note = tk.Text(self._note_area, height=2, wrap="word",
+        self._note = tk.Text(self._note_area, height=2, width=26, wrap="word",
                              bg=theme.BG_PANEL, fg=theme.FG, insertbackground=theme.FG,
                              bd=0, highlightthickness=1, highlightbackground=theme.BG_BUTTON,
                              font=self._note_font)
@@ -237,7 +247,7 @@ class ChecklistRunView(tk.Frame):
         rframe.pack(fill="x", anchor="w", pady=(theme.PAD, 0))
         tk.Label(rframe, text="Remarks / observations", bg=theme.BG, fg=theme.FG_MUTED,
                  font=app.font_small).pack(anchor="w")
-        self.remarks = _text_box(app, rframe, height=3, width=60)
+        self.remarks = _text_box(app, rframe, height=2, width=60)
         self.remarks.pack(fill="x")
 
         self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=app.font_small,
