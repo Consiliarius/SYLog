@@ -232,14 +232,13 @@ class ChecklistRunView(tk.Frame):
         self._started = datetime.now(timezone.utc)
 
         tk.Label(self, text=self.title_text, bg=theme.BG, fg=theme.FG,
-                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
-        tk.Label(self, text="Nothing is mandatory. Date and time of completion are "
-                 "recorded automatically.", bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).pack(anchor="w", padx=theme.PAD)
+                 font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, 0))
 
         self._fonts = _item_fonts(app)
         body = _ScrollBody(self)
-        body.pack(fill="both", expand=True, padx=theme.PAD, pady=theme.PAD)
+        # No bottom pad: the scroll area runs right down to the footer bar, so the
+        # remarks box isn't clipped and the scrollbar reaches the bottom.
+        body.pack(fill="both", expand=True, padx=theme.PAD, pady=(theme.PAD, 0))
         self.rows = [_ChecklistItemRow(app, body.inner, item, self._fonts)
                      for item in checklist_def.get("items", [])]
 
@@ -249,10 +248,6 @@ class ChecklistRunView(tk.Frame):
                  font=app.font_small).pack(anchor="w")
         self.remarks = _text_box(app, rframe, height=2, width=60)
         self.remarks.pack(fill="x")
-
-        self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=app.font_small,
-                                wraplength=theme.DEFAULT_W - 40, justify="left", anchor="w")
-        self._banner.pack(fill="x", padx=theme.PAD)
 
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
