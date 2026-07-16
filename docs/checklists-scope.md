@@ -151,6 +151,12 @@ and `note` is written **only when true** (absent means false — the flag merely
 pre-expands the field; it never makes a note required). Changes take effect when
 the tool restarts.
 
+**`"starts_engine": true`** — optional, per checklist, absent means false. Marks a
+checklist the engine is started for: saving it **offers** to log an engine start
+(§14.11). It never logs one by itself. Shown as a checkbox on the checklist's row
+in the Settings editor, and written only when set, exactly like an item's `note`.
+The example config sets it on I-WOBBLE and not on close-up.
+
 ```json
 "checklists": [
   {
@@ -443,11 +449,55 @@ commitment to build yet:
   - **Soft-delete arrived with it** (§5.4) — engine runs were the only record type
     that could not be corrected. Edit still cannot: it would need a v2→v3
     migration for `edited`/`edited_utc`.
-- **"Log Engine Start?" prompt** after completing (or saving-and-raising) an
-  engine-start checklist (I-WOBBLE): the checklist exists precisely because the
-  engine is about to run, so offering to start the engine timer there closes the
-  loop and guards against an unlogged run (§10.2). Would need a way to mark a
-  checklist as engine-starting in config (e.g. a `"starts_engine": true` flag).
+- ~~**"Log Engine Start?" prompt**~~ — **BUILT, 16 July 2026**
+  (`checklists.EngineStartOfferView`). A checklist marked `"starts_engine": true`
+  offers to log an engine start after Save **and** after Save & raise issues. It
+  exists because the checklist runs precisely when the engine is about to, so the
+  offer closes the loop and guards against an unlogged run (§10.2).
+  - **Offered, never automatic.** §4.4 records what was confirmed and never
+    presumes; a checklist saving itself must not start a timer that accrues the
+    hours driving servicing (§7).
+  - **The time is editable, and that is the point.** I-WOBBLE's last item is
+    *"Exhaust — cooling water flowing at start"* — it cannot be ticked unless the
+    engine is **already running**. Save is therefore a minute or two late, and
+    "now" would quietly under-record the run. It defaults to now and can be
+    corrected; back-dating suppresses the position as everywhere else (§6.4).
+    This is why an item-level action was not needed to get the time right.
+  - **It never blocks.** Unticked items or raised issues do not suppress the
+    offer: this is a log, not an interlock (§1.2). Raising "belt worn" does not
+    stop the skipper starting the engine, and the tool does not presume to.
+  - **Provenance is free with a session open** — the `engine_on` entry carries
+    *both* `engine_run_id` and `checklist_run_id`, columns `entry` already had.
+    With no session there is no entry at all (`entry.session_id` is `NOT NULL`)
+    and `engine_run` has no checklist column, so a start offered ashore records
+    the run but not its origin. Accepted; a migration would not be worth it.
+  - An engine already running is **surfaced, not hidden** (§6.5's habit), and
+    §6.5 ordering warnings keep the view rather than being lost to navigation.
+
+- **Other checklist-initiated actions — DEFERRED 16 July 2026, reasoning kept.**
+  Raised: an anchoring checklist logging an arrival; a close-up logging an
+  arrival *and* ending the session; a pre-departure marking a departure. Judged
+  more complexity than the need justifies for now. What the analysis found, so it
+  need not be redone:
+  - **They are not one kind of thing.** Starting the engine is a single write with
+    no form. A departure/arrival is a **form** (`DepartArriveForm`: time, place,
+    remarks). Ending a session is a **whole flow** (`EndSessionView`: log reading,
+    notes, two prompts, then export + backup). So "the checklist performs an
+    action" means re-implementing two existing forms; handing off to them is the
+    cheaper coupling, and only the engine needs no hand-off.
+  - **The passage kind is derived, not chosen** (§6.4, `passage_next_kind`). A
+    config asserting `log_arrival` can contradict what the log says comes next.
+    If built, a checklist should declare *"offer a passage event"* and let the
+    tool derive which — config must not assert the kind.
+  - **No session, no entry.** `entry.session_id` is `NOT NULL`, so departure and
+    arrival are impossible without an open session — and checklists deliberately
+    run with none (the orientation case). This bites the pre-departure example
+    hardest: it is the checklist most likely to be run *before* a session exists.
+  - **Actions must stay after-save.** Anything navigating away mid-run destroys
+    the half-ticked form (the `_show`-rebuilds-the-caller property, §15.5).
+  - If `start_session` were ever added, note that `_write_run()` captures
+    `session_id` at save time — a checklist that starts a session would be
+    orphaned from the very session it opened unless the run is updated after.
 - **HTML review export** — see §14.10.
 
 ---

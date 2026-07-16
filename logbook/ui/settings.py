@@ -403,6 +403,7 @@ class _Record:
     toggle: tk.Button = None  # ▸/▾ — the child list is packed, not destroyed
     count: tk.Label = None    # "(7 items)", shown only while collapsed
     expanded: bool = False
+    flags: dict = field(default_factory=dict)   # config key -> BooleanVar
 
 
 class _RecordListSection:
@@ -434,6 +435,11 @@ class _RecordListSection:
     child_key = "children"
     child_noun = "entry"     # for the collapsed summary: "(7 items)"
     child_editor = _StringListEditor
+    # ((config_key, label), ...) — an optional per-record BOOLEAN, shown as a
+    # checkbox on the record's head. Sails declare none; a checklist uses it to
+    # say it starts the engine (§14.11). Written only when true, like an item's
+    # `note`: absent IS false, and writing `false` everywhere is noise.
+    record_flags: tuple = ()
 
     def __init__(self, app):
         self.app = app
@@ -474,12 +480,17 @@ class _RecordListSection:
         count = tk.Label(head, text="", bg=theme.BG, fg=theme.FG_MUTED,
                          font=self.app.font_small)
         count.pack(side="left", padx=(0, theme.PAD))
+        flags = {}
+        for flag_key, flag_label in self.record_flags:
+            flags[flag_key] = tk.BooleanVar(value=bool(raw.get(flag_key)))
+            _check(head, flag_label, flags[flag_key],
+                   font=self.app.font_small).pack(side="left", padx=(0, theme.PAD))
         # Built whether or not it is shown: collapsing PACK_FORGETs the child
         # editor, it never destroys it, so collect() and validate() see a
         # collapsed record exactly as they see an open one.
         children = self.child_editor(frame, self.app, raw.get(self.child_key))
         record = _Record(frame=frame, key=key, name=name, children=children, raw=raw,
-                         toggle=toggle, count=count)
+                         toggle=toggle, count=count, flags=flags)
         toggle.configure(command=lambda: self._set_expanded(record, not record.expanded))
         _small_button(head, "Remove", lambda: self._remove(record),
                       font=self.app.font_small).pack(side="left")
@@ -533,6 +544,11 @@ class _RecordListSection:
             raw[self.id_key] = record.key.get().strip()
             raw[self.name_key] = record.name.get().strip()
             raw[self.child_key] = record.children.collect()
+            for flag_key, var in record.flags.items():
+                if var.get():
+                    raw[flag_key] = True
+                else:
+                    raw.pop(flag_key, None)      # absent IS false
             out.append(raw)
         return out
 
@@ -603,7 +619,9 @@ class _ChecklistsSection(_RecordListSection):
     blurb = ("Each becomes a button on the Checklists screen, and its items the "
              "list worked through there. Reword or retire freely: a completed run "
              "keeps its own copy, so past runs never change. 'Note open' starts "
-             "that item's note field open — every item can take a note either way.")
+             "that item's note field open — every item can take a note either way. "
+             "'Starts the engine' makes saving the checklist OFFER to log an engine "
+             "start; it never logs one on its own.")
     path = ("checklists",)
     noun = "checklist"
     add_label = "Add checklist"
@@ -612,6 +630,7 @@ class _ChecklistsSection(_RecordListSection):
     name_width = 30          # "Close-up — end of passage" clipped at the sails' 22
     child_key, child_editor = "items", _ItemListEditor
     child_noun = "item"
+    record_flags = (("starts_engine", "Starts the engine"),)
 
 
 # Custom sections render after the scalars — list editors are bulkier. Checklists

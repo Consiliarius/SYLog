@@ -17,10 +17,19 @@ import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime, timezone
 
-from logbook import db
+from logbook import db, engine
 from logbook.ui import render, theme
 from logbook.ui.app import (_big_button, _ScrollBody, raise_task_issue,
-                            write_checklist_complete_event)
+                            write_checklist_complete_event, write_event)
+from logbook.ui.forms import _parse_time_field, _time_entry
+
+
+def _after_checklist(app) -> None:
+    """Where the checklist flow lands when it is done: the log if a session is
+    open, else back to the picker. Shared, because the engine-start offer (§14.11)
+    can now sit between the save and that landing."""
+    session = app.d.open_session()
+    app.show_session(session) if session is not None else app.show_checklists()
 
 
 def _item_fonts(app):
@@ -208,6 +217,9 @@ class ChecklistRunView(tk.Frame):
         self.app = app
         self.key = checklist_def.get("key", "")
         self.title_text = checklist_def.get("title", self.key or "Checklist")
+        # Marked in config as a checklist the engine is started for (§14.11).
+        # It only makes saving OFFER; it never starts anything by itself.
+        self.starts_engine = bool(checklist_def.get("starts_engine"))
         self._started = datetime.now(timezone.utc)
 
         # Header: title, then a divider so scrolling content clearly slides UNDER
@@ -265,8 +277,7 @@ class ChecklistRunView(tk.Frame):
         return run_id
 
     def _save(self):
-        self._write_run()
-        self._after_save()
+        self._after_save(self._write_run())
 
     def _save_and_raise(self):
         # Every filled note becomes an issue linked to the run — the note IS the
@@ -279,14 +290,136 @@ class ChecklistRunView(tk.Frame):
                 raise_task_issue(self.app, kind="issue", source="checklist",
                                  description=f"{r.title()}: {note}",
                                  checklist_run_id=run_id)
-        self._after_save()
+        self._after_save(run_id)
 
-    def _after_save(self):
-        session = self.app.d.open_session()
-        self.app.show_session(session) if session is not None else self.app.show_checklists()
+    def _after_save(self, run_id):
+        # The offer comes after BOTH saves, including Save & raise issues: this is
+        # a log, not an interlock (§1.2). Raising "belt worn" does not stop the
+        # skipper starting the engine, and the tool does not presume to (§4.4).
+        if self.starts_engine:
+            self.app.show_engine_start_offer(run_id, self.title_text)
+            return
+        _after_checklist(self.app)
 
     def _cancel(self):
         self.app.show_checklists()
+
+
+class EngineStartOfferView(tk.Frame):
+    """"Log engine start?" — after a checklist marked ``starts_engine`` (§14.11).
+
+    **Offered, never automatic.** §4.4 records what was confirmed and never
+    presumes; a checklist saving itself must not silently start a timer that
+    accrues the hours driving servicing (§7).
+
+    **The time is editable, and that is the whole point.** I-WOBBLE's last item is
+    "Exhaust — cooling water flowing at start" — it cannot be ticked unless the
+    engine is ALREADY running. So by the time Save is pressed the engine has been
+    running a minute or two, and "now" would quietly under-record it. Defaulting
+    to now and letting it be corrected is how every other form here handles the
+    same problem, and back-dating suppresses the position exactly as elsewhere.
+
+    A run already open is SURFACED, not hidden: silently dropping the offer would
+    look like the tool forgetting (§6.5's habit).
+    """
+
+    def __init__(self, parent, app, *, run_id, title):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self.run_id = run_id
+
+        state = engine.timer_state(app.d)
+        self._blocked = None
+        if state.status is engine.TimerStatus.RUNNING:
+            self._blocked = "The engine is already logged as running — nothing to start."
+        elif state.status is engine.TimerStatus.ERROR:
+            self._blocked = (f"{len(state.open_runs)} engine runs are open; resolve "
+                             f"that before starting another.")
+
+        self._heading = tk.Label(self, text="Log engine start?", bg=theme.BG,
+                                 fg=theme.FG, font=app.font_large)
+        self._heading.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, 0))
+        tk.Label(self, text=f"“{title}” is marked as a checklist the engine is "
+                 f"started for.", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small, wraplength=theme.DEFAULT_W - 40,
+                 justify="left").pack(anchor="w", padx=theme.PAD)
+        tk.Frame(self, bg=theme.FG_MUTED, height=1).pack(fill="x",
+                                                         pady=(theme.PAD - 2, 0))
+
+        body = tk.Frame(self, bg=theme.BG)
+        body.pack(fill="x", padx=theme.PAD, pady=theme.PAD)
+        if self._blocked:
+            tk.Label(body, text=self._blocked, bg=theme.BG, fg=theme.WARN,
+                     font=app.font_base, wraplength=theme.DEFAULT_W - 40,
+                     justify="left").pack(anchor="w")
+        else:
+            row = tk.Frame(body, bg=theme.BG)
+            row.pack(anchor="w")
+            tk.Label(row, text="Started at", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left", padx=(0, theme.PAD))
+            self.time_entry = _time_entry(app, row)
+            self.time_entry.pack(side="left")
+            tk.Label(row, text="— correct it if the engine has been running a few "
+                     "minutes already", bg=theme.BG, fg=theme.FG_MUTED,
+                     font=app.font_small).pack(side="left", padx=theme.PAD)
+            self._backdate_note = tk.Label(body, text="", bg=theme.BG, fg=theme.WARN,
+                                           font=app.font_small)
+            self._backdate_note.pack(anchor="w", pady=(2, 0))
+            self.time_entry.bind("<KeyRelease>", self._check_backdate)
+
+        self._banner = tk.Label(self, bg=theme.BG, fg=theme.WARN, font=app.font_small,
+                                wraplength=theme.DEFAULT_W - 40, justify="left",
+                                anchor="w")
+        self._banner.pack(fill="x", padx=theme.PAD)
+
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        # Back-out left, progress right — the app-wide footer convention (§13).
+        self._skip_btn = _big_button(footer, "Not now", lambda: _after_checklist(app))
+        self._skip_btn.pack(side="left", padx=theme.PAD, pady=theme.PAD)
+        if not self._blocked:
+            self._log_btn = _big_button(footer, "Log engine start", self._log)
+            self._log_btn.pack(side="right", padx=theme.PAD, pady=theme.PAD)
+        tk.Frame(self, bg=theme.FG_MUTED, height=1).pack(side="bottom", fill="x")
+
+    def _check_backdate(self, _event=None):
+        when = _parse_time_field(self.time_entry.get(), self.app.tz)
+        offset = abs((datetime.now(timezone.utc) - when).total_seconds())
+        self._backdate_note.configure(
+            text=("Back-dated — no position will be recorded for this event."
+                  if offset > self.app.backdate_tolerance_sec else ""))
+
+    def _log(self):
+        when = _parse_time_field(self.time_entry.get(), self.app.tz)
+        session = self.app.d.open_session()
+        try:
+            result = engine.start(
+                self.app.d, when,
+                session_id=session["id"] if session is not None else None)
+        except engine.EngineError as exc:      # raced with the Engine button
+            self._banner.configure(text=str(exc), fg=theme.BAD)
+            return
+        if session is not None:
+            # ONE log line carrying BOTH links — the run it started and the
+            # checklist that prompted it. `entry` already has both columns, so the
+            # provenance costs nothing. With no session open there is no entry at
+            # all (entry.session_id is NOT NULL), and engine_run has no checklist
+            # column: the run is recorded, its origin is not.
+            write_event(self.app, session, when=when, event_kind="engine_on",
+                        engine_run_id=result.run_id, checklist_run_id=self.run_id)
+        if result.warnings:
+            # The run HAS started; these are §6.5 overlap/ordering warnings and
+            # must not be thrown away by navigating off. The Engine button keeps
+            # them on a notice for the same reason — so stay put and say so.
+            self._logged(result.warnings)
+            return
+        _after_checklist(self.app)
+
+    def _logged(self, warnings) -> None:
+        self._heading.configure(text="Engine start logged.")
+        self._banner.configure(text="; ".join(warnings), fg=theme.WARN)
+        self._log_btn.configure(state="disabled")
+        self._skip_btn.configure(text="Done")
 
 
 class ChecklistHistoryView(tk.Frame):

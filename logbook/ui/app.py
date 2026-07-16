@@ -474,6 +474,12 @@ class App:
         caller = self._reshow
         self._show(lambda: engine_log.EngineHoursView(self._content, self, back=caller))
 
+    def show_engine_start_offer(self, run_id, title) -> None:
+        """Offer to log an engine start after a `starts_engine` checklist (§14.11)."""
+        from logbook.ui import checklists
+        self._show(lambda: checklists.EngineStartOfferView(
+            self._content, self, run_id=run_id, title=title))
+
     def show_task_form(self, kind, *, checklist_run_id=None) -> None:
         from logbook.ui import tasks
         self._show(lambda: tasks.TaskIssueFormView(

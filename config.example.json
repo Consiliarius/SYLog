@@ -20,6 +20,7 @@
     {
       "key": "iwobble",
       "title": "I-WOBBLE — engine start",
+      "starts_engine": true,
       "items": [
         {"label": "Isolator — battery isolator on"},
         {"label": "Water — raw-water seacock open, weed filter clear"},

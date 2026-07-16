@@ -407,6 +407,24 @@ class SettingsViewTestCase(unittest.TestCase):
         item = _read_json(self.path)["checklists"][0]["items"][0]
         self.assertNotIn("note", item)              # cleared, not written as false
 
+    def test_the_starts_engine_flag_round_trips_and_is_written_only_when_set(self):
+        # A per-record flag (§14.11): absent means false, like an item's `note`.
+        self._open()
+        record = self._checklists()._records[0]
+        self.assertFalse(record.flags["starts_engine"].get())
+        record.flags["starts_engine"].set(True)
+        self.app.views.current._save()
+        self.assertTrue(_read_json(self.path)["checklists"][0]["starts_engine"])
+
+        record.flags["starts_engine"].set(False)
+        self.app.views.current._save()
+        self.assertNotIn("starts_engine", _read_json(self.path)["checklists"][0])
+
+    def test_sails_have_no_record_flags(self):
+        # The flag hook is optional and per-section: a sail does not start engines.
+        self._open()
+        self.assertEqual(self._sails()._records[0].flags, {})
+
     def test_unknown_keys_survive_on_a_checklist_and_inside_an_item(self):
         # §14.11 floats a "starts_engine" flag on a checklist; the preserve rule
         # has to hold at BOTH levels, record and item.
