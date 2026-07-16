@@ -111,9 +111,73 @@ def _parse(kind, text, options=None):
         raise ValueError(f"'{text}' is not a number") from None
 
 
+class _LocationsSection:
+    """The standing departure/arrival places (§14.4) — a list of plain strings.
+
+    The first CUSTOM section: scalars come from ``_SECTIONS``, but a list needs
+    its own editor. Sections implement ``build(parent)`` and ``apply(data)``, which
+    is the hook the deferred sails and checklist editors will use too (§15.5).
+    """
+
+    heading = "Standing locations"
+    path = ("locations",)
+
+    def __init__(self, app):
+        self.app = app
+        self._rows: list = []
+
+    def build(self, parent):
+        box = tk.LabelFrame(parent, text=self.heading, bg=theme.BG, fg=theme.FG_MUTED,
+                            font=self.app.font_small, bd=1, labelanchor="nw",
+                            padx=theme.PAD, pady=theme.PAD)
+        tk.Label(box, text="Offered first in the Depart/Arrive picker, on every "
+                 "passage — ahead of recent history.", bg=theme.BG,
+                 fg=theme.FG_MUTED, font=self.app.font_small).pack(anchor="w")
+        self._holder = tk.Frame(box, bg=theme.BG)
+        self._holder.pack(fill="x", pady=(4, 0))
+        for name in _get(self.app.config.data, self.path) or []:
+            self._add_row(str(name))
+        _big_button(box, "Add location", lambda: self._add_row("")).pack(
+            anchor="w", pady=(theme.PAD, 0))
+        return box
+
+    def _add_row(self, value: str) -> None:
+        row = tk.Frame(self._holder, bg=theme.BG)
+        row.pack(fill="x", pady=1)
+        entry = tk.Entry(row, width=30, bg=theme.BG_PANEL, fg=theme.FG,
+                         insertbackground=theme.FG, bd=0, highlightthickness=1,
+                         highlightbackground=theme.BG_BUTTON, font=self.app.font_base)
+        entry.insert(0, value)
+        entry.pack(side="left")
+        pair = (row, entry)
+        tk.Button(row, text="Remove", command=lambda: self._remove(pair),
+                  bg=theme.BG_BUTTON, fg=theme.FG_MUTED, bd=0, highlightthickness=0,
+                  font=self.app.font_small, cursor="hand2",
+                  padx=theme.PAD, pady=2).pack(side="left", padx=theme.PAD)
+        self._rows.append(pair)
+
+    def _remove(self, pair) -> None:
+        row, _ = pair
+        self._rows.remove(pair)
+        row.destroy()
+
+    def collect(self) -> list[str]:
+        """Current names, in order. Blank rows are dropped, so 'Add' then leaving
+        it empty is simply a no-op rather than an empty entry in the picker."""
+        return [entry.get().strip() for _, entry in self._rows if entry.get().strip()]
+
+    def apply(self, data) -> None:
+        _set(data, self.path, self.collect())
+
+
+# Custom sections render after the scalars — list editors are bulkier, and this
+# is where the deferred sails and checklist editors will join (§15.5).
+_CUSTOM_SECTIONS = (_LocationsSection,)
+
+
 class SettingsView(tk.Frame):
-    """Edit the configurable scalars. Reached from the ⚙ on the status bar, so
-    Back returns to whichever view opened it (§15.5)."""
+    """Edit the configurable scalars and lists. Reached from the ⚙ on the status
+    bar, so Back returns to whichever view opened it (§15.5)."""
 
     def __init__(self, parent, app, *, back=None):
         super().__init__(parent, bg=theme.BG)
@@ -145,6 +209,9 @@ class SettingsView(tk.Frame):
         body.pack(fill="both", expand=True, padx=theme.PAD, pady=(theme.PAD, 0))
         for heading, fields in _SECTIONS:
             self._build_section(body.inner, heading, fields)
+        self._custom = [section(app) for section in _CUSTOM_SECTIONS]
+        for section in self._custom:
+            section.build(body.inner).pack(fill="x", anchor="w", pady=(0, theme.PAD))
 
         tk.Label(body.inner, text="Paths and the engine-hours baseline are not "
                  "editable here — see docs. Changes take effect when the tool "
@@ -204,6 +271,8 @@ class SettingsView(tk.Frame):
         data = self.app.config.data          # mutate in place: unknown keys survive
         for path, value in values.items():
             _set(data, path, value)
+        for section in self._custom:
+            section.apply(data)
         try:
             self.app.config.save()
         except OSError as exc:

@@ -148,6 +148,42 @@ class SettingsViewTestCase(unittest.TestCase):
         self.assertEqual(written["vessel"]["callsign"], "MABC1")   # untouched on disk
         self.assertEqual(written["vessel"]["beam"], 2.6)
 
+    # -- locations, the first custom (list) section (§15.5) --------------------
+
+    def _locations(self):
+        return self.app.views.current._custom[0]
+
+    def test_locations_load_from_config(self):
+        self._open()
+        self.assertEqual(self._locations().collect(), ["Home berth"])
+
+    def test_add_and_remove_locations_saves_the_list(self):
+        self._open()
+        section = self._locations()
+        section._add_row("Fuel pontoon")
+        section._add_row("Rye Harbour")
+        section._remove(section._rows[0])           # drop "Home berth"
+        self.app.views.current._save()
+        written = json.loads(self.path.read_text())
+        self.assertEqual(written["locations"], ["Fuel pontoon", "Rye Harbour"])
+
+    def test_blank_location_rows_are_dropped(self):
+        # 'Add location' then leaving it empty is a no-op, not a blank entry in
+        # the Depart/Arrive picker.
+        self._open()
+        self._locations()._add_row("   ")
+        self.app.views.current._save()
+        self.assertEqual(json.loads(self.path.read_text())["locations"], ["Home berth"])
+
+    def test_locations_survive_a_failed_save(self):
+        # The all-or-nothing rule covers the list sections too.
+        view = self._open()
+        self._locations()._add_row("Fuel pontoon")
+        self._set(("vessel", "beam"), "wide")        # a bad scalar
+        view._save()
+        self.assertIn("Beam", view._banner.cget("text"))
+        self.assertEqual(json.loads(self.path.read_text())["locations"], ["Home berth"])
+
     def test_back_returns_to_the_calling_view(self):
         from logbook.ui.app import SessionView
         self.d.create_session(opened_utc="2026-07-16T08:00:00Z")
