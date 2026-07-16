@@ -18,6 +18,7 @@ Spec: §15.5.
 from __future__ import annotations
 
 import tkinter as tk
+from dataclasses import dataclass
 
 from logbook.ui import theme
 from logbook.ui.app import _big_button, _ScrollBody
@@ -55,6 +56,26 @@ _SECTIONS = (
         (("backup", "interval_min"), "In-session interval (min), 0 = off", "number", None),
     )),
 )
+
+
+def _entry(parent, *, font, width, value=""):
+    """The one text-entry style in the editor — scalars and list rows alike."""
+    entry = tk.Entry(parent, width=width, bg=theme.BG_PANEL, fg=theme.FG,
+                     insertbackground=theme.FG, bd=0, highlightthickness=1,
+                     highlightbackground=theme.BG_BUTTON, font=font)
+    entry.insert(0, value)
+    return entry
+
+
+def _small_button(parent, text, command, *, font):
+    """The quiet inline control of a list row — 'Remove', 'Add reef'.
+
+    Deliberately not ``_big_button``: it is housekeeping beside the row, not the
+    thing the row is for, and a grid of touch-sized buttons would swamp the list.
+    """
+    return tk.Button(parent, text=text, command=command, bg=theme.BG_BUTTON,
+                     fg=theme.FG_MUTED, bd=0, highlightthickness=0, font=font,
+                     cursor="hand2", padx=theme.PAD, pady=2)
 
 
 def _get(data, path):
@@ -115,8 +136,8 @@ class _LocationsSection:
     """The standing departure/arrival places (§14.4) — a list of plain strings.
 
     The first CUSTOM section: scalars come from ``_SECTIONS``, but a list needs
-    its own editor. Sections implement ``build(parent)`` and ``apply(data)``, which
-    is the hook the deferred sails and checklist editors will use too (§15.5).
+    its own editor. Sections implement ``build(parent)``, ``validate()`` and
+    ``apply(data)`` — the hook the deferred checklist editor will use too (§15.5).
     """
 
     heading = "Standing locations"
@@ -144,16 +165,11 @@ class _LocationsSection:
     def _add_row(self, value: str) -> None:
         row = tk.Frame(self._holder, bg=theme.BG)
         row.pack(fill="x", pady=1)
-        entry = tk.Entry(row, width=30, bg=theme.BG_PANEL, fg=theme.FG,
-                         insertbackground=theme.FG, bd=0, highlightthickness=1,
-                         highlightbackground=theme.BG_BUTTON, font=self.app.font_base)
-        entry.insert(0, value)
+        entry = _entry(row, font=self.app.font_base, width=30, value=value)
         entry.pack(side="left")
         pair = (row, entry)
-        tk.Button(row, text="Remove", command=lambda: self._remove(pair),
-                  bg=theme.BG_BUTTON, fg=theme.FG_MUTED, bd=0, highlightthickness=0,
-                  font=self.app.font_small, cursor="hand2",
-                  padx=theme.PAD, pady=2).pack(side="left", padx=theme.PAD)
+        _small_button(row, "Remove", lambda: self._remove(pair),
+                      font=self.app.font_small).pack(side="left", padx=theme.PAD)
         self._rows.append(pair)
 
     def _remove(self, pair) -> None:
@@ -166,13 +182,232 @@ class _LocationsSection:
         it empty is simply a no-op rather than an empty entry in the picker."""
         return [entry.get().strip() for _, entry in self._rows if entry.get().strip()]
 
+    def validate(self) -> None:
+        """Nothing here can be invalid: any text is a place name, and a blank row
+        is dropped rather than rejected. Present so every section validates the
+        same way, before anything is written (the all-or-nothing rule)."""
+
     def apply(self, data) -> None:
         _set(data, self.path, self.collect())
 
 
-# Custom sections render after the scalars — list editors are bulkier, and this
-# is where the deferred sails and checklist editors will join (§15.5).
-_CUSTOM_SECTIONS = (_LocationsSection,)
+class _StringListEditor(tk.Frame):
+    """A child list of plain STRINGS — a sail's reefs.
+
+    The pluggable half of ``_RecordListSection``. A child editor is a Frame that
+    knows how to ``collect()`` its list and ``validate()`` it; the record list
+    outside knows nothing else about it. The deferred checklist editor is a
+    second class implementing those same two methods over a list of OBJECTS
+    (label + note flag) — which is what makes checklists a drop-in rather than a
+    second build (§15.5).
+    """
+
+    heading = "Reefs"
+    add_label = "Add reef"
+
+    def __init__(self, parent, app, values):
+        super().__init__(parent, bg=theme.BG)
+        self.app = app
+        self._rows: list = []
+        tk.Label(self, text=self.heading, bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).pack(anchor="w")
+        self._holder = tk.Frame(self, bg=theme.BG)
+        self._holder.pack(fill="x")
+        # Tolerant of a hand-edited config: anything but a list reads as none,
+        # rather than iterating a string into one row per character. Values go to
+        # add() RAW — rendering one is the editor's business, not this loop's,
+        # which is what lets an editor of objects reuse this constructor.
+        for value in values if isinstance(values, list) else []:
+            self.add(value)
+        _small_button(self, self.add_label, lambda: self.add(),
+                      font=app.font_small).pack(anchor="w", pady=(2, 0))
+
+    def add(self, value="") -> None:
+        row = tk.Frame(self._holder, bg=theme.BG)
+        row.pack(fill="x", pady=1)
+        entry = _entry(row, font=self.app.font_base, width=24, value=str(value))
+        entry.pack(side="left")
+        pair = (row, entry)
+        _small_button(row, "Remove", lambda: self._remove(pair),
+                      font=self.app.font_small).pack(side="left", padx=theme.PAD)
+        self._rows.append(pair)
+
+    def _remove(self, pair) -> None:
+        row, _ = pair
+        self._rows.remove(pair)
+        row.destroy()
+
+    def collect(self) -> list[str]:
+        """The strings, in order; blank rows dropped, as a location row is."""
+        return [entry.get().strip() for _, entry in self._rows if entry.get().strip()]
+
+    def validate(self) -> None:
+        """Any text is a valid reef name, and blanks are dropped, so nothing here
+        can fail. Present because the child-editor protocol requires it."""
+
+
+@dataclass
+class _Record:
+    """One row of a record list: its widgets, plus the dict it came from."""
+
+    frame: tk.Frame
+    key: tk.Entry
+    name: tk.Entry
+    children: object          # the pluggable child editor
+    raw: dict                 # the ORIGINAL record — updated, never rebuilt
+
+
+class _RecordListSection:
+    """A list of RECORDS, each with a key, a display name and a nested child list.
+
+    ``sails`` and ``checklists`` are structurally the same thing (§15.5) — they
+    differ only in what their child list holds:
+
+    - ``vessel.sails``: ``id`` + ``name`` + ``reefs[]``  — a list of STRINGS
+    - ``checklists``:   ``key`` + ``title`` + ``items[]`` — a list of OBJECTS
+
+    So the OUTER list is built once, here — add and remove records, edit the key
+    and the name, host a child editor per record — and the CHILD editor is
+    pluggable. Checklists then arrive as a subclass naming its keys plus one new
+    child editor, rather than as a second build of all of this. That was the
+    explicit constraint on the sails editor: don't preclude checklists.
+
+    A subclass supplies the class attributes below; it needs no methods.
+    """
+
+    heading = ""
+    blurb = ""
+    path: tuple = ()
+    noun = "record"          # used in validation messages: "the sail 'main' ..."
+    add_label = "Add record"
+    id_key, id_label = "id", "Id"          # `id_key` is whatever names the record
+    name_key, name_label = "name", "Name"
+    child_key = "children"
+    child_editor = _StringListEditor
+
+    def __init__(self, app):
+        self.app = app
+        self._records: list[_Record] = []
+
+    def build(self, parent):
+        box = tk.LabelFrame(parent, text=self.heading, bg=theme.BG, fg=theme.FG_MUTED,
+                            font=self.app.font_small, bd=1, labelanchor="nw",
+                            padx=theme.PAD, pady=theme.PAD)
+        tk.Label(box, text=self.blurb, bg=theme.BG, fg=theme.FG_MUTED,
+                 font=self.app.font_small, wraplength=theme.DEFAULT_W - 100,
+                 justify="left").pack(anchor="w")
+        self._holder = tk.Frame(box, bg=theme.BG)
+        self._holder.pack(fill="x", pady=(4, 0))
+        for raw in _get(self.app.config.data, self.path) or []:
+            self._add_record(raw if isinstance(raw, dict) else {})
+        _big_button(box, self.add_label, lambda: self._add_record({})).pack(
+            anchor="w", pady=(theme.PAD, 0))
+        return box
+
+    def _add_record(self, raw: dict) -> None:
+        frame = tk.Frame(self._holder, bg=theme.BG, highlightthickness=1,
+                         highlightbackground=theme.BG_BUTTON, padx=theme.PAD, pady=4)
+        frame.pack(fill="x", pady=2)
+        head = tk.Frame(frame, bg=theme.BG)
+        head.pack(fill="x")
+        key = self._field(head, self.id_label, raw.get(self.id_key), width=10)
+        name = self._field(head, self.name_label, raw.get(self.name_key), width=22)
+        children = self.child_editor(frame, self.app, raw.get(self.child_key))
+        children.pack(fill="x", padx=(theme.PAD, 0), pady=(4, 0))
+        record = _Record(frame=frame, key=key, name=name, children=children, raw=raw)
+        _small_button(head, "Remove", lambda: self._remove(record),
+                      font=self.app.font_small).pack(side="left", padx=theme.PAD)
+        self._records.append(record)
+
+    def _field(self, parent, label, value, *, width) -> tk.Entry:
+        tk.Label(parent, text=label, bg=theme.BG, fg=theme.FG_MUTED,
+                 font=self.app.font_small).pack(side="left", padx=(0, 4))
+        entry = _entry(parent, font=self.app.font_base, width=width,
+                       value="" if value is None else str(value))
+        entry.pack(side="left", padx=(0, theme.PAD))
+        return entry
+
+    def _remove(self, record: _Record) -> None:
+        self._records.remove(record)
+        record.frame.destroy()
+
+    def _is_blank(self, record: _Record) -> bool:
+        """An 'Add' that was thought better of — dropped, not rejected, exactly as
+        a blank location row is."""
+        return not (record.key.get().strip() or record.name.get().strip()
+                    or record.children.collect())
+
+    def collect(self) -> list[dict]:
+        """The records, in order, as dicts to store.
+
+        Each record's ORIGINAL dict is COPIED AND UPDATED, never rebuilt from the
+        three keys this editor knows about — the same reasoning as the top-level
+        save mutating the loaded config in place: a key this build has never heard
+        of survives the round trip.
+        """
+        out = []
+        for record in self._records:
+            if self._is_blank(record):
+                continue
+            raw = dict(record.raw)
+            raw[self.id_key] = record.key.get().strip()
+            raw[self.name_key] = record.name.get().strip()
+            raw[self.child_key] = record.children.collect()
+            out.append(raw)
+        return out
+
+    def validate(self) -> None:
+        """Every record needs a key and a name (§15.5), and the keys must be
+        distinct — the entry form and the export both index sails BY id, so a
+        duplicate would silently shadow a sail rather than announce itself.
+        """
+        seen: set[str] = set()
+        for record in self._records:
+            if self._is_blank(record):
+                continue
+            key, name = record.key.get().strip(), record.name.get().strip()
+            if not key:
+                raise ValueError(
+                    f"the {self.noun} '{name}' has no {self.id_label.lower()}")
+            if not name:
+                raise ValueError(
+                    f"the {self.noun} '{key}' has no {self.name_label.lower()}")
+            if key in seen:
+                raise ValueError(
+                    f"two {self.noun}s share the {self.id_label.lower()} '{key}'")
+            seen.add(key)
+            record.children.validate()
+
+    def apply(self, data) -> None:
+        _set(data, self.path, self.collect())
+
+
+class _SailsSection(_RecordListSection):
+    """The wardrobe behind the Sail plan form's dropdowns (`forms.SailPlan`).
+
+    Note the path: ``sails`` lives under ``vessel``, not at the top level like
+    ``locations`` and ``checklists``. It is also a REQUIRED key that must be a
+    list (``config._REQUIRED``) — so ``apply()`` always writes a list and never
+    removes the key; an empty one is the way to have no sails.
+    """
+
+    heading = "Sails"
+    blurb = ("Each sail becomes a row on the Sail plan form, and its reefs become "
+             "that row's dropdown. The id is what the log stores, so renaming a "
+             "sail is safe but changing its id detaches entries already logged "
+             "against it.")
+    path = ("vessel", "sails")
+    noun = "sail"
+    add_label = "Add sail"
+    id_key, id_label = "id", "Id"
+    name_key, name_label = "name", "Name"
+    child_key, child_editor = "reefs", _StringListEditor
+
+
+# Custom sections render after the scalars — list editors are bulkier. This is
+# the hook the deferred checklist editor joins, as a _RecordListSection subclass
+# plus a child editor for its items (§15.5).
+_CUSTOM_SECTIONS = (_LocationsSection, _SailsSection)
 
 
 class SettingsView(tk.Frame):
@@ -239,11 +474,7 @@ class SettingsView(tk.Frame):
                 menu.grid(row=row, column=1, sticky="w", pady=2)
                 self._widgets[path] = var
             else:
-                entry = tk.Entry(box, width=30, bg=theme.BG_PANEL, fg=theme.FG,
-                                 insertbackground=theme.FG, bd=0, highlightthickness=1,
-                                 highlightbackground=theme.BG_BUTTON,
-                                 font=self.app.font_base)
-                entry.insert(0, current)
+                entry = _entry(box, font=self.app.font_base, width=30, value=current)
                 entry.grid(row=row, column=1, sticky="w", pady=2)
                 self._widgets[path] = entry
 
@@ -258,14 +489,22 @@ class SettingsView(tk.Frame):
             self.app.show_launch()
 
     def _save(self) -> None:
-        # Validate everything first: nothing is written until every field parses,
-        # so a bad entry cannot leave the config half-applied (the viewer's rule).
+        # Validate everything first — scalars AND sections — because nothing is
+        # written until all of it parses: a bad entry anywhere cannot leave the
+        # config half-applied (the viewer's rule). Hence sections validate here
+        # rather than inside apply(), which runs when the answer is already yes.
         values = {}
         for path, label, kind, options in self._fields:
             try:
                 values[path] = _parse(kind, self._raw(path), options)
             except ValueError as exc:
                 self._banner.configure(text=f"{label}: {exc}", fg=theme.BAD)
+                return
+        for section in self._custom:
+            try:
+                section.validate()
+            except ValueError as exc:
+                self._banner.configure(text=f"{section.heading}: {exc}", fg=theme.BAD)
                 return
 
         data = self.app.config.data          # mutate in place: unknown keys survive

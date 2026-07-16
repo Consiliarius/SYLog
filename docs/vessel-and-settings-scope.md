@@ -1,13 +1,16 @@
 # Vessel Logbook Tool — §15 Vessel Reference & Settings
 
-**Status:** Build in progress. **Done:** config accessors + the `meta` identity
+**Status:** §15 is **built**. **Done:** config accessors + the `meta` identity
 mirror; the four identity columns in the summary CSV; the launch card, the slim
 session bar and the Radio hint; the Settings shell (⚙, return-to-caller nav,
-atomic write, scalars) and the standing-locations list.
-**Remaining: the reusable sails record-list** (§15.5) — join it to the
-`_CUSTOM_SECTIONS` hook in `logbook/ui/settings.py`, alongside
-`_LocationsSection`, and build it as a record list with a *pluggable child-list
-editor* so the deferred checklist editor is a drop-in rather than a second build.
+atomic write, scalars), the standing-locations list, and the sails record-list —
+built as `_RecordListSection` (the outer list: add/remove records, edit key +
+name, host a child editor) with a *pluggable child-list editor*
+(`_StringListEditor` for reefs), so the deferred checklist editor is a subclass
+plus one child editor rather than a second build.
+**Remaining:** nothing in §15. `checklists` stays deferred by decision, and is no
+longer precluded — a test exercises the record list with a different child editor
+to keep that true.
 **Date:** 16 July 2026
 
 Extends `logbook-scope.md`. Numbered §15 so it slots in without renumbering the

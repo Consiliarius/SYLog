@@ -184,6 +184,137 @@ class SettingsViewTestCase(unittest.TestCase):
         self.assertIn("Beam", view._banner.cget("text"))
         self.assertEqual(json.loads(self.path.read_text())["locations"], ["Home berth"])
 
+    # -- sails, the reusable record list + pluggable child editor (§15.5) ------
+
+    def _sails(self):
+        return self.app.views.current._custom[1]
+
+    def test_sails_load_from_config(self):
+        self._open()
+        section = self._sails()
+        self.assertEqual(section.collect(),
+                         [{"id": "main", "name": "Mainsail", "reefs": ["full"]}])
+
+    def test_edit_a_sail_and_its_reefs_saves_under_vessel(self):
+        # The gotcha: sails live under `vessel`, not at the top level.
+        self._open()
+        record = self._sails()._records[0]
+        record.name.delete(0, "end")
+        record.name.insert(0, "Main")
+        record.children.add("1st reef")
+        record.children.add("2nd reef")
+        self.app.views.current._save()
+        written = json.loads(self.path.read_text())
+        self.assertEqual(written["vessel"]["sails"], [
+            {"id": "main", "name": "Main", "reefs": ["full", "1st reef", "2nd reef"]}])
+
+    def test_add_and_remove_sails(self):
+        self._open()
+        section = self._sails()
+        section._add_record({})
+        added = section._records[-1]
+        added.key.insert(0, "genoa")
+        added.name.insert(0, "Genoa")
+        added.children.add("well furled")
+        section._remove(section._records[0])            # drop the mainsail
+        self.app.views.current._save()
+        self.assertEqual(json.loads(self.path.read_text())["vessel"]["sails"],
+                         [{"id": "genoa", "name": "Genoa", "reefs": ["well furled"]}])
+
+    def test_removing_every_sail_writes_an_empty_list_not_a_missing_key(self):
+        # vessel.sails is REQUIRED and must be a list (config._REQUIRED): drop the
+        # key and the tool will not start at all.
+        self._open()
+        section = self._sails()
+        section._remove(section._records[0])
+        self.app.views.current._save()
+        self.assertEqual(json.loads(self.path.read_text())["vessel"]["sails"], [])
+        config.load(self.path, example_path=self.path)      # still loads
+
+    def test_a_wholly_blank_sail_is_dropped_not_rejected(self):
+        # 'Add sail' then thinking better of it is a no-op, as it is for a location.
+        self._open()
+        self._sails()._add_record({})
+        self.app.views.current._save()
+        self.assertEqual(len(json.loads(self.path.read_text())["vessel"]["sails"]), 1)
+
+    def test_a_sail_without_an_id_writes_nothing_at_all(self):
+        view = self._open()
+        section = self._sails()
+        section._add_record({})
+        section._records[-1].name.insert(0, "Genoa")     # a name, but no id
+        self._set(("vessel", "callsign"), "MXYZ9")       # a good edit alongside
+        view._save()
+        self.assertIn("Sails", view._banner.cget("text"))
+        written = json.loads(self.path.read_text())
+        self.assertEqual(len(written["vessel"]["sails"]), 1)
+        self.assertEqual(written["vessel"]["callsign"], "MABC1")   # untouched
+
+    def test_a_sail_without_a_name_is_rejected(self):
+        view = self._open()
+        section = self._sails()
+        section._add_record({})
+        section._records[-1].key.insert(0, "genoa")
+        view._save()
+        self.assertIn("no name", view._banner.cget("text"))
+
+    def test_duplicate_sail_ids_are_rejected(self):
+        # The entry form and the export both index sails by id, so a duplicate
+        # would silently shadow a sail rather than announce itself.
+        view = self._open()
+        section = self._sails()
+        section._add_record({})
+        section._records[-1].key.insert(0, "main")
+        section._records[-1].name.insert(0, "Trysail")
+        view._save()
+        self.assertIn("share the id", view._banner.cget("text"))
+        self.assertEqual(len(json.loads(self.path.read_text())["vessel"]["sails"]), 1)
+
+    def test_blank_reef_rows_are_dropped(self):
+        self._open()
+        self._sails()._records[0].children.add("   ")
+        self.app.views.current._save()
+        self.assertEqual(
+            json.loads(self.path.read_text())["vessel"]["sails"][0]["reefs"], ["full"])
+
+    def test_unknown_keys_inside_a_sail_record_survive(self):
+        # The preserve-unknown-keys rule applies within a record too: collect()
+        # updates the original dict rather than rebuilding it from id/name/reefs.
+        self.cfg.data["vessel"]["sails"][0]["colour"] = "white"
+        self._open()
+        self._sails()._records[0].name.insert(0, "Big ")
+        self.app.views.current._save()
+        sail = json.loads(self.path.read_text())["vessel"]["sails"][0]
+        self.assertEqual(sail["colour"], "white")
+        self.assertEqual(sail["name"], "Big Mainsail")
+
+    def test_the_record_list_is_reusable_with_a_different_child_editor(self):
+        # The point of step 5c: checklists must be a drop-in, not a second build.
+        # A subclass naming its own keys and child editor is the whole of it.
+        class _ItemEditor(settings._StringListEditor):
+            def add(self, value=""):
+                super().add(value.get("label", "") if isinstance(value, dict) else value)
+
+            def collect(self):
+                return [{"label": text} for text in super().collect()]
+
+        class _ChecklistsSection(settings._RecordListSection):
+            heading, path, noun = "Checklists", ("checklists",), "checklist"
+            id_key, id_label = "key", "Key"
+            name_key, name_label = "title", "Title"
+            child_key, child_editor = "items", _ItemEditor
+
+        view = self._open()
+        section = _ChecklistsSection(self.app)
+        section.build(view).pack()
+        self.assertEqual(section.collect(),
+                         [{"key": "iwobble", "title": "I-WOBBLE",
+                           "items": [{"label": "Oil"}]}])
+        section.validate()
+        section._records[0].key.delete(0, "end")
+        with self.assertRaises(ValueError):
+            section.validate()                  # a checklist needs a key, as a sail does
+
     def test_back_returns_to_the_calling_view(self):
         from logbook.ui.app import SessionView
         self.d.create_session(opened_utc="2026-07-16T08:00:00Z")
