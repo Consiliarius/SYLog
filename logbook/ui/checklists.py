@@ -231,13 +231,29 @@ class ChecklistRunView(tk.Frame):
         self.title_text = checklist_def.get("title", self.key or "Checklist")
         self._started = datetime.now(timezone.utc)
 
+        # Header: title, then a divider so scrolling content clearly slides UNDER
+        # a static header instead of vanishing where header and body are both plain.
         tk.Label(self, text=self.title_text, bg=theme.BG, fg=theme.FG,
                  font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, 0))
+        tk.Frame(self, bg=theme.FG_MUTED, height=1).pack(fill="x", pady=(theme.PAD - 2, 0))
 
+        # Footer packed from the bottom with its own divider above it, so the grey
+        # button bar reads as distinct from the grey remarks box that can sit just
+        # above it — no more "bulging footer". Cancel left (back out), Save and
+        # Save & raise issues right (progress) — compact, for a lighter bar.
+        footer = tk.Frame(self, bg=theme.BG_PANEL)
+        footer.pack(side="bottom", fill="x")
+        _big_button(footer, "Cancel", self._cancel, compact=True).pack(
+            side="left", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Save & raise issues", self._save_and_raise, compact=True).pack(
+            side="right", padx=theme.PAD, pady=theme.PAD)
+        _big_button(footer, "Save", self._save, compact=True).pack(
+            side="right", padx=(theme.PAD, 0), pady=theme.PAD)
+        tk.Frame(self, bg=theme.FG_MUTED, height=1).pack(side="bottom", fill="x")
+
+        # Body fills the gap between the two dividers.
         self._fonts = _item_fonts(app)
         body = _ScrollBody(self)
-        # No bottom pad: the scroll area runs right down to the footer bar, so the
-        # remarks box isn't clipped and the scrollbar reaches the bottom.
         body.pack(fill="both", expand=True, padx=theme.PAD, pady=(theme.PAD, 0))
         self.rows = [_ChecklistItemRow(app, body.inner, item, self._fonts)
                      for item in checklist_def.get("items", [])]
@@ -248,15 +264,6 @@ class ChecklistRunView(tk.Frame):
                  font=app.font_small).pack(anchor="w")
         self.remarks = _text_box(app, rframe, height=2, width=60)
         self.remarks.pack(fill="x")
-
-        footer = tk.Frame(self, bg=theme.BG_PANEL)
-        footer.pack(side="bottom", fill="x")
-        _big_button(footer, "Cancel", self._cancel).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Save", self._save).pack(
-            side="right", padx=theme.PAD, pady=theme.PAD)
-        _big_button(footer, "Save & raise issues", self._save_and_raise).pack(
-            side="left", padx=theme.PAD, pady=theme.PAD)
 
     def _items_json(self) -> str:
         return json.dumps([r.collect() for r in self.rows])

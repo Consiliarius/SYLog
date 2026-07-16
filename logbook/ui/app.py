@@ -587,16 +587,24 @@ def _preferred_font_family(root) -> str:
     return tkfont.nametofont("TkDefaultFont").cget("family")
 
 
-def _big_button(parent, text, command, *, width=0):
+def _big_button(parent, text, command, *, width=0, compact=False):
     """A flat button with a hover state, a pointer cursor and a thin border.
 
     Tk has no rounded corners, gradients or shadows, but a hover shift and a
     little edge definition go a long way from the dead-flat default. Colours are
     derived from the palette via ``theme.mix``, so a button tracks light/dark
-    automatically. Padding keeps the touch target >= 44 px (invariant 10)."""
+    automatically. Padding keeps the touch target >= 44 px (invariant 10).
+
+    ``compact`` shaves ~2 px off the font and tightens the padding for a lighter
+    footer; it dips just under the 44 px touch floor, so it is for the non-touch
+    netbook, used where a footer would otherwise be too tall."""
     base = theme.BG_BUTTON
     hover = theme.mix(base, theme.FG, 0.16)
     border = theme.mix(base, theme.FG, 0.30)
+    extra = {}
+    if compact:
+        family = tkfont.nametofont("TkDefaultFont").cget("family")
+        extra["font"] = tkfont.Font(family=family, size=theme.SIZE_BASE - 2)
     btn = tk.Button(
         parent, text=text, command=command,
         bg=base, fg=theme.FG,
@@ -604,7 +612,9 @@ def _big_button(parent, text, command, *, width=0):
         disabledforeground=theme.FG_MUTED,
         bd=0, relief="flat", highlightthickness=1,
         highlightbackground=border, highlightcolor=border,
-        padx=theme.PAD * 2, pady=theme.PAD + 4, width=width, cursor="hand2",
+        padx=theme.PAD + 4 if compact else theme.PAD * 2,
+        pady=theme.PAD if compact else theme.PAD + 4,
+        width=width, cursor="hand2", **extra,
     )
 
     def _enter(_event):
