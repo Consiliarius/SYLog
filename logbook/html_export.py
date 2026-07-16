@@ -26,12 +26,14 @@ Spec: §14.10, §14.10.1, §14.10.2.
 from __future__ import annotations
 
 import html
+import json
 from datetime import timezone, tzinfo
 from string import Template
 
 from logbook import db, engine
 from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
-    engine_baseline_note, vessel_bar,
+    checklist_summary, engine_baseline_note, engine_run_when, format_hm,
+    precip_text, split_label, vessel_bar, wind_text,
 )
 
 # One shared stylesheet, inlined into every page. Light only: a single theme is
@@ -42,6 +44,11 @@ from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
 # base, system fonts (a web font is a network dependency, and there is none).
 STYLESHEET = """
 :root {
+  /* Light only, and declared: without this a phone set to dark can have the
+     user agent restyle form controls and scrollbars over a page that has no
+     dark palette to meet them (§14.10.2). */
+  color-scheme: light;
+
   --ink: #17242f;
   --ink-soft: #55677a;
   --ink-faint: #8496a6;
@@ -66,7 +73,7 @@ body {
   color: var(--ink);
   font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
         "Helvetica Neue", Arial, sans-serif;
-  /* The body never scrolls sideways; a wide table scrolls inside .scroll. */
+  /* The body never scrolls sideways (§14.10.2). */
   overflow-x: hidden;
 }
 
@@ -146,50 +153,17 @@ h2 {
   line-height: 1.45;
 }
 
-/* -- tables ------------------------------------------------------------- */
-
-/* The wide ones (the entries timeline) scroll in here, not in the page. */
-.scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-  background: var(--card);
-}
-
-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-
-th, td {
-  padding: 0.5rem 0.6rem;
-  text-align: left;
-  vertical-align: top;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--rule);
-}
-
-th {
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  background: var(--accent-soft);
-}
-
-tr:last-child td { border-bottom: 0; }
-
-td.wrap-cell { white-space: normal; min-width: 12rem; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
-
 /* -- row state (§6.10) --------------------------------------------------- */
 
 /* Soft-deleted rows are shown struck through, never omitted — the page cannot
-   be less complete than the CSV. */
-.deleted td, .deleted { color: var(--gone); text-decoration: line-through; }
-.deleted .badge { text-decoration: none; }
+   be less complete than the CSV. The badges keep their own decoration, or a
+   struck-through 'DELETED' would be the least legible word on the card. */
+.deleted { color: var(--gone); text-decoration: line-through; }
+.deleted .badge, .deleted .muted { text-decoration: none; }
 
-/* Rows sharing a group_id are visibly grouped. */
-.group-start td { border-top: 2px solid var(--accent-soft); }
+/* No table styles: nothing renders a table. §14.10.2's open question resolved
+   to stacked cards, so a `.scroll` container and column rules would be dead
+   weight inlined into every page. Reinstate them with a table, not before. */
 
 .badge {
   display: inline-block;
@@ -227,6 +201,29 @@ a.row-link:hover .task-desc { color: var(--accent); }
 
 .muted { color: var(--ink-soft); font-size: 0.9rem; }
 .empty { color: var(--ink-faint); font-style: italic; padding: 0.5rem 0; }
+
+/* -- timeline ------------------------------------------------------------ */
+
+.clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.entry .kv { margin-top: 0.5rem; }
+
+.pos {
+  margin: 0.1rem 0 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+}
+
+.remark { margin: 0.5rem 0 0; line-height: 1.45; }
+
+.ticks { list-style: none; margin: 0.6rem 0 0; padding: 0; font-size: 0.9rem; }
+.ticks li { padding: 0.15rem 0; }
+.tick { color: var(--accent); font-weight: 700; }
+.tick.untick { color: var(--flag); }
 
 details { margin-top: 0.5rem; }
 summary {
@@ -495,3 +492,267 @@ def render_index(d, sessions, open_count: int, *,
 
     return page(_vessel_title(d), "".join(parts),
                 subtitle=bar or None, home=False)
+
+
+# -- session-NNN.html ----------------------------------------------------------
+
+# The words an event row reads as. Mirrors render._EVENT_TEXT, but titled for a
+# page rather than a dense log line; the tag itself carries the rest.
+_EVENT_TEXT = {
+    "session_open": "Log opened", "departure": "Departed", "arrival": "Arrived",
+    "engine_on": "Engine started", "engine_off": "Engine stopped",
+    "engine_duration": "Engine run logged", "engine_issue": "Engine issue",
+    "autolog_on": "Auto-log started", "autolog_off": "Auto-log stopped",
+    "checklist_complete": "Checklist completed",
+    "task_raised": "Task added", "task_done": "Task completed",
+    "issue_raised": "Issue raised", "issue_closed": "Issue closed",
+}
+_TAG = {
+    "departure": ("Depart", ""), "arrival": ("Arrive", ""),
+    "engine_on": ("Engine", ""), "engine_off": ("Engine", ""),
+    "engine_duration": ("Engine", ""), "engine_issue": ("Engine", "flag"),
+    "session_open": ("Log", "quiet"),
+    "autolog_on": ("Auto", "quiet"), "autolog_off": ("Auto", "quiet"),
+    "checklist_complete": ("Check", ""),
+    "task_raised": ("Task", ""), "task_done": ("Task", ""),
+    "issue_raised": ("Issue", "flag"), "issue_closed": ("Issue", "flag"),
+}
+_TAG_BY_CATEGORY = {
+    "auto": ("Auto", "quiet"), "observation": ("Obs", ""), "sail": ("Sail", ""),
+    "radio": ("Radio", ""), "crew": ("Crew", ""), "event": ("Event", ""),
+}
+
+
+def _entry_tag(row) -> str:
+    text, kind = (_TAG.get(row["event_kind"])
+                  or _TAG_BY_CATEGORY.get(row["category"], ("Entry", "")))
+    return _badge(text, kind=kind)
+
+
+def _position_html(row) -> str:
+    """A position, with its provenance attached (§4.1, §8, §14.10.2).
+
+    ``position_dm`` is the CSV's own reading column, already formatted by
+    ``export._entry_row``; taking it rather than re-deriving it is what makes
+    "parity by construction" literal rather than coincidental (§14.10.1).
+
+    A TYPED position is badged. §14.10.2: *"do not render a back-dated typed
+    position as though the boat was measured there"* — the CSV keeps the two
+    apart in ``position_source`` precisely so this cannot be lost, and a page
+    that dropped the distinction would claim the boat was measured somewhere it
+    was only reckoned to be.
+    """
+    if not row["position_dm"]:
+        return ""
+    fix = _esc(row["position_dm"])
+    if row["position_source"] == "manual":
+        return f'{fix} {_badge("typed", kind="flag")}'
+    return fix
+
+
+def _entry_facts(row) -> list[tuple[str, str]]:
+    """What this entry actually recorded, as (label, html) — only what IS there.
+
+    Units live in the labels, per §8: *"a CSV whose columns require documentation
+    is not archival"*, and a review page needing a key is worse.
+    """
+    facts: list[tuple[str, str]] = []
+    if row["sog_kn"] is not None or row["cog_deg"] is not None:
+        bits = []
+        if row["sog_kn"] is not None:
+            bits.append(f"{row['sog_kn']:.1f} kn")
+        if row["cog_deg"] is not None:
+            bits.append(f"{round(row['cog_deg'])}°")
+        facts.append(("Course over ground", _esc(" · ".join(bits))))
+    if row["heading_deg"] is not None:
+        facts.append(("Heading", _esc(f"{round(row['heading_deg'])}°"
+                                      f"{row['heading_ref'] or ''}")))
+    if row["log_nm"] is not None:
+        facts.append(("Log (nm)", _esc(f"{row['log_nm']:g}")))
+
+    wind = wind_text(row)
+    if wind:
+        facts.append(("Wind", _esc(wind)))
+    if row["sea_state"] is not None:
+        facts.append(("Sea state", _esc(row["sea_state"])))
+    if row["cloud_oktas"] is not None:
+        facts.append(("Cloud (oktas)", _esc(f"{row['cloud_oktas']}/8")))
+    precip = precip_text(row["precip_type"], row["precip_intensity"])
+    if precip:
+        facts.append(("Precipitation", _esc(precip)))
+    if row["visibility"]:
+        facts.append(("Visibility", _esc(row["visibility"])))
+    if row["pressure_mb"] is not None:
+        facts.append(("Pressure (mb)", _esc(f"{row['pressure_mb']:g}")))
+
+    # sail_plan is the CSV's legible column, with the display names already
+    # resolved at export time — readable forever without config.json (§8).
+    if row["sail_plan"]:
+        facts.append(("Sails", _esc(row["sail_plan"])))
+    if row["radio_channel"] or row["radio_station"]:
+        facts.append(("Radio", _esc(" · ".join(
+            x for x in (row["radio_channel"], row["radio_station"]) if x))))
+    if row["location_name"]:
+        facts.append(("Place", _esc(row["location_name"])))
+    return facts
+
+
+def _entry_card(row, *, tz: tzinfo, grouped: bool) -> str:
+    """One entry as a stacked card."""
+    marks = [_entry_tag(row)]
+    if row["deleted"]:
+        marks.append(_badge("deleted", kind="flag"))
+    elif row["edited"]:
+        marks.append(_badge("edited", kind="quiet"))
+    if grouped:
+        marks.append(_badge("same action", kind="quiet"))
+
+    facts = _entry_facts(row)
+    event = _EVENT_TEXT.get(row["event_kind"], "")
+    lines = []
+    if event:
+        lines.append(f'<p class="task-desc">{_esc(event)}</p>')
+    pos = _position_html(row)
+    if pos:
+        lines.append(f'<p class="pos">{pos}</p>')
+    if facts:
+        lines.append('<dl class="kv">' + "".join(
+            f"<div><dt>{_esc(label)}</dt><dd>{value}</dd></div>"
+            for label, value in facts) + "</dl>")
+    if row["remarks"]:
+        lines.append(f'<p class="remark">{_esc(row["remarks"])}</p>')
+    if row["deleted"] and row["deleted_reason"]:
+        lines.append(f'<p class="muted">deleted: {_esc(row["deleted_reason"])}</p>')
+
+    cls = "card entry deleted" if row["deleted"] else "card entry"
+    return (f'<li class="{cls}">'
+            f'<div class="task-head"><span class="clock">'
+            f'{_esc(_when(row["timestamp_utc"], tz=tz, fmt="%H:%M"))}</span>'
+            f'{"".join(marks)}</div>'
+            + "".join(lines) + "</li>")
+
+
+def _timeline(rows, *, tz: tzinfo) -> str:
+    """The entries as stacked cards, in ``id`` order — written order (§14.10.2).
+
+    **Cards, not a table** — §14.10.2 left this open, to be decided "against a
+    real session's data rather than in the abstract". Measured against a real
+    21-entry passage at 375 px, the table's natural width was 950 px: Time, Tag
+    and Position were fully visible, COG/SOG 5%, and **Wind, Sails and Remarks
+    0%** — 64% of it behind a horizontal scroll. Its supposed advantage, keeping
+    the tabular reading, does not survive the device: columns you cannot see
+    cannot be compared, and the remark — the most valuable thing in the log —
+    was the column furthest off-screen. Cards cost length (5,300 px vs 2,950 px
+    for that session), which is the cheap axis on a phone: vertical scroll is
+    the one-handed gesture.
+    """
+    if not rows:
+        return _empty("No entries logged for this session.")
+    # A group_id shared by ONE row is not a group — only mark a real one (§6.7).
+    seen: dict = {}
+    for r in rows:
+        if r["group_id"]:
+            seen[r["group_id"]] = seen.get(r["group_id"], 0) + 1
+    return '<ul class="stack">' + "".join(
+        _entry_card(r, tz=tz,
+                    grouped=bool(r["group_id"]) and seen[r["group_id"]] > 1)
+        for r in rows) + "</ul>"
+
+
+def _engine_rows_html(runs, *, tz: tzinfo) -> str:
+    if not runs:
+        return _empty("No engine runs logged for this session.")
+    out = []
+    for r in runs:
+        marks = _badge("deleted", kind="flag") if r["deleted"] else ""
+        cls = ' class="card deleted"' if r["deleted"] else ' class="card"'
+        facts = [("When", _esc(engine_run_when(r, tz=tz))),
+                 ("Duration", _esc("running" if r["open"]
+                                   else format_hm(r["duration_min"] or 0)))]
+        if r["notes"]:
+            facts.append(("Notes", _esc(r["notes"])))
+        out.append(f"<li{cls}><div class=\"task-head\">{_badge('Engine')}{marks}</div>"
+                   + '<dl class="kv">' + "".join(
+                       f"<div><dt>{_esc(k)}</dt><dd>{v}</dd></div>"
+                       for k, v in facts) + "</dl></li>")
+    return '<ul class="stack">' + "".join(out) + "</ul>"
+
+
+def _checklist_html(runs, *, tz: tzinfo) -> str:
+    """Checklist runs, from each run's OWN snapshot — so it reads the same
+    forever without config.json (§8, §14.2's snapshot principle)."""
+    if not runs:
+        return ""
+    out = []
+    for r in runs:
+        try:
+            items = json.loads(r["items_json"] or "[]")
+        except (TypeError, ValueError):
+            items = []
+        ticks = []
+        for it in items:
+            title, descriptor = split_label(it.get("label", ""))
+            mark = "&#10003;" if it.get("checked") else "&times;"
+            cls = "tick" if it.get("checked") else "tick untick"
+            note = (f' <span class="muted">{_esc(it["note"])}</span>'
+                    if it.get("note") else "")
+            ticks.append(f'<li><span class="{cls}">{mark}</span> '
+                         f'{_esc(title)}{note}</li>')
+        marks = _badge("deleted", kind="flag") if r["deleted"] else ""
+        cls = ' class="card deleted"' if r["deleted"] else ' class="card"'
+        out.append(
+            f"<li{cls}><div class=\"task-head\">{_badge('Check')}{marks}"
+            f'<span class="muted">'
+            f'{_esc(_when(r["completed_utc"], tz=tz, fmt="%H:%M"))}</span></div>'
+            f'<p class="task-desc">{_esc(checklist_summary(r["title"], r["items_json"]))}</p>'
+            f'<ul class="ticks">{"".join(ticks)}</ul>'
+            + (f'<p class="remark">{_esc(r["remarks"])}</p>' if r["remarks"] else "")
+            + "</li>")
+    return "<h2>Checklists</h2><ul class=\"stack\">" + "".join(out) + "</ul>"
+
+
+def render_session(summary, entries, engine_runs, checklist_runs, *,
+                   tz: tzinfo = timezone.utc) -> str:
+    """The logbook page — "what happened on that passage?"
+
+    The summary FIRST — departure and arrival, distance, time under way vs
+    stationary (§5.6) — then the timeline beneath it. Not a CSV dump with a
+    header (§14.10.2).
+
+    Every argument is ``export_session``'s own row dicts, so the page cannot
+    disagree with the archive (§14.10.1).
+    """
+    number = int(summary["id"])
+    passage = " to ".join(x for x in (summary["departed_from"],
+                                      summary["bound_for"]) if x)
+
+    lead = ["<div class=\"card lead\">"]
+    if summary["distance_og_nm"] is not None:
+        lead.append(f'<p class="figure">{summary["distance_og_nm"]:g} nm</p>')
+    lead.append('<dl class="kv">')
+    facts = [
+        ("Departed", _esc(summary["departed_from"]) or "&mdash;"),
+        ("Bound for", _esc(summary["bound_for"]) or "&mdash;"),
+        ("Under way", _esc(format_hm(summary["time_under_way_min"] or 0))),
+        ("Stationary", _esc(format_hm(summary["time_stationary_min"] or 0))),
+    ]
+    if summary["log_start_nm"] is not None and summary["log_end_nm"] is not None:
+        facts.append(("Log (nm)", _esc(f'{summary["log_start_nm"]:g} '
+                                       f'→ {summary["log_end_nm"]:g}')))
+    if summary["skipper"]:
+        facts.append(("Skipper", _esc(summary["skipper"])))
+    if summary["crew"]:
+        facts.append(("Crew", _esc(summary["crew"])))
+    if not summary["closed"]:
+        facts.append(("Status", _badge("still open", kind="flag")))
+    lead.extend(f"<div><dt>{_esc(k)}</dt><dd>{v}</dd></div>" for k, v in facts)
+    lead.append("</dl></div>")
+
+    parts = ["".join(lead), "<h2>Timeline</h2>",
+             _timeline(entries, tz=tz),
+             "<h2>Engine</h2>", _engine_rows_html(engine_runs, tz=tz),
+             _checklist_html(checklist_runs, tz=tz)]
+
+    when = _when(summary["opened_utc"], tz=tz, fmt="%d %B %Y")
+    return page(f"Session {number:03d}", "".join(parts),
+                subtitle=" · ".join(x for x in (passage, when) if x) or None)

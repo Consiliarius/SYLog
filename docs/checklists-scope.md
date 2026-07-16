@@ -445,21 +445,31 @@ since §14.10 was parked went into the pure `render` layer as it asked:
 `task_issue_line`, `engine_run_line`/`engine_run_when`, `vessel_bar`,
 `format_hm`, `format_position`.
 
-*Corrected 16 July 2026, building step 2:* this section originally claimed
-**"There is no Tk-only string to extract."** That was wrong. `_NOTE_TEXT` — the
-baseline's §7 provenance, the one string §7 forbids showing the hours without —
-sat inside `engine_log.py`, which imports tkinter. `index.html` needed it, so it
-moved to `render.engine_baseline_note` per §14.10's own standing rule, and the
-Tk view now reads it from there. The reconciliation arithmetic went with it, to
-`engine.reconciliation`: the status bar, the engine-hours view and the HTML page
-now take the figure AND its caveat from one place, which is the whole of §7's
-point. Audit the claim, don't trust it — the next page may find another.
+*Corrected 16 July 2026, building steps 2 and 3:* this section originally claimed
+**"There is no Tk-only string to extract."** That was wrong, twice.
+
+- `_NOTE_TEXT` — the baseline's §7 provenance, the one string §7 forbids showing
+  the hours without — sat inside `engine_log.py`, which imports tkinter.
+  `index.html` needed it, so it moved to `render.engine_baseline_note` per
+  §14.10's own standing rule, and the Tk view now reads it from there. The
+  reconciliation arithmetic went with it, to `engine.reconciliation`: the status
+  bar, the engine-hours view and the HTML page now take the figure AND its
+  caveat from one place, which is the whole of §7's point.
+- `render._wind` and `render._precip` were pure but **private**, so a page could
+  not reach them without reaching into another module's internals. `_wind`
+  encodes §6.8 — *Beaufort OR knots, never one derived from the other* — and the
+  timeline needs it. Now public as `wind_text` / `precip_text`: two copies of
+  that rule is one copy waiting to be wrong. `_sail` was left alone; the page
+  never needed it, because `sail_plan` arrives pre-resolved (see the table).
+
+The claim was directionally right — the strings were pure, none was trapped in a
+widget — but "no work to do" was not the same thing. Audit it, don't trust it.
 
 **Decisions §14.10 left open, resolved here:**
 
 | Question | Resolution |
 |---|---|
-| Rendered from the DB, or from the CSV rows? | **From the same row dicts `export.py` already builds** for the CSVs (`_entry_row`, `_summary_row`, `sail_columns`, …). Parity by construction: the page cannot disagree with the archive, and it stays honest that HTML is a *rendering of* the record, not a second record. |
+| Rendered from the DB, or from the CSV rows? | **From the same row dicts `export.py` already builds** for the CSVs (`_entry_row`, `_summary_row`, `sail_columns`, …). Parity by construction: the page cannot disagree with the archive, and it stays honest that HTML is a *rendering of* the record, not a second record. *Sharper than expected (16 July 2026, building step 3): those dicts already carry the RENDERED columns — `_entry_row` does not pass `sail_state` through at all, having resolved it to `sail_plan` with display names fixed at export time, and it precomputes `position_dm`. So the page reads the CSV's own values instead of re-deriving them, which makes the parity literal rather than coincidental — and `render_session` needs **no `sails` argument**, because the config wardrobe is already baked in. That is §8's "readable forever without config.json" paying out somewhere it was not designed for.* |
 | When is it generated? | **On export**, beside the CSVs — export already runs at End Session. Cross-cutting pages (index, worklist, engine) regenerate every time, exactly as `engine-cumulative.csv` already does; the session page is written for the session being exported. Idempotent and re-runnable. |
 | Where does it go? | The **backup directory** (§14.10), so the existing `rclone copy` carries it to the phone with no new mechanism. Confirm against `export.py`'s current `out_dir` before building. |
 | Self-contained? | **Yes — inline the CSS, no JS, no CDN, no web fonts.** It is read on a phone, possibly offline, possibly years later. (`<link>` to a sibling stylesheet *would* work over `file://` — only fetch is blocked — but inlining removes the question.) |
@@ -493,7 +503,10 @@ point. Audit the claim, don't trust it — the next page may find another.
    near-term wish, earliest value, no new queries. Confirmed: `d.sessions()`,
    `d.task_issues_including_deleted()` and `engine.cumulative_minutes` all
    already existed; nothing new was queried.
-3. `session-NNN.html` from `export_session`'s own row dicts.
+3. **BUILT (16 July 2026).** `session-NNN.html` from `export_session`'s own row
+   dicts. The timeline is stacked cards — §14.10.2's open question, resolved
+   there against a real session's data. Takes no `sails` argument: see the note
+   on rendered columns below.
 4. `engine.html` — the cumulative reconciliation, then every run.
 5. Wire into `export.py` beside the CSV writers; a `--no-html` escape hatch if
    generation ever proves slow on the netbook.
@@ -570,12 +583,35 @@ dropping them would make the page say something the tool refuses to say:**
   reason: nobody asked to print it, and CSV is the archival record if anyone
   ever does. Struck, and stays struck.
 
-**The one genuinely open question, for whoever builds it:** the entries timeline
-on a narrow screen. It is the widest thing here — time, position, sails, weather,
-remarks, provenance — and a phone is ~380 px. Either it scrolls horizontally in
-its own container (keeps the tabular reading, costs one-handedness), or each
-entry becomes a stacked card (reads well on a phone, loses column comparison).
-Worth deciding against a real session's data rather than in the abstract.
+**The one genuinely open question — RESOLVED 16 July 2026: stacked cards.**
+The question was the entries timeline on a narrow screen: horizontal scroll in
+its own container (keeps the tabular reading, costs one-handedness) versus a
+stacked card per entry (reads well on a phone, loses column comparison). This
+section asked for it to be decided against a real session's data rather than in
+the abstract, so both were built and measured against a 21-entry Solent passage
+carrying every event type at 375 px. The table's natural width came to 950 px:
+
+| Column | Visible on a phone |
+|---|---|
+| Time, Tag, Position | 100% |
+| COG/SOG | 5% |
+| Wind, Sails, **Remarks** | **0%** |
+
+64% of the table sat behind the scroll. **The tabular reading it was supposed to
+buy does not survive the device** — columns you cannot see cannot be compared,
+and the remark, the most valuable thing in the log, was the column furthest
+off-screen; every row would need a sideways scroll to read it. The framing above
+called that cost "one-handedness", which understated it.
+
+Cards cost length — 5,300 px against 2,950 px for that session — and that is the
+cheap axis on a phone, where vertical scroll is the one-handed gesture. If a
+future passage with hours of auto-logging makes the length genuinely unwieldy,
+the fix is to compact or fold the `auto` fixes, **not** to bring the table back.
+
+*Method note, worth repeating for the next open question: this was settled in a
+morning by building both and measuring, after months of being arguable either
+way on paper. The fixture lives in the build session's scratchpad, not the repo
+— rebuild it from this section's description if it is needed again.*
 
 ## 14.11 Future development backlog (flagged, not built)
 

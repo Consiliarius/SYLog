@@ -93,7 +93,13 @@ def _tag(row) -> str:
     return _TAG_BY_CATEGORY.get(row["category"], "ENTRY")
 
 
-def _wind(row) -> str | None:
+def wind_text(row) -> str | None:
+    """Wind as a skipper reads it, or None if none was recorded.
+
+    Public because the HTML review page renders wind too, and §6.8's rule —
+    Beaufort OR knots, NEVER one derived from the other — must be stated once.
+    Two copies of that rule is one copy waiting to be wrong (§14.10).
+    """
     parts = []
     if row["wind_dir_deg"] is not None:
         parts.append(compass(row["wind_dir_deg"]))
@@ -105,13 +111,15 @@ def _wind(row) -> str | None:
     return " ".join(parts) if parts else None
 
 
-def _precip(ptype, intensity) -> str | None:
+def precip_text(ptype, intensity) -> str | None:
+    """'moderate rain' from type + intensity; None when there was none. Composed
+    at display time from structured storage, never concatenated at storage."""
     if not ptype or ptype == "none":
         return None
     return f"{intensity} {ptype}" if intensity else ptype
 
 
-def _sail(sail_json, sails=None) -> str | None:
+def sail_text(sail_json, sails=None) -> str | None:
     if not sail_json:
         return None
     try:
@@ -141,14 +149,14 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
     if row["log_nm"] is not None:
         parts.append(f"log {row['log_nm']:g}")
 
-    wind = _wind(row)
+    wind = wind_text(row)
     if wind:
         parts.append(wind)
     if row["sea_state"] is not None:
         parts.append(f"sea {row['sea_state']}")
     if row["cloud_oktas"] is not None:
         parts.append(f"{row['cloud_oktas']}/8")
-    precip = _precip(row["precip_type"], row["precip_intensity"])
+    precip = precip_text(row["precip_type"], row["precip_intensity"])
     if precip:
         parts.append(precip)
     if row["visibility"]:
@@ -156,7 +164,7 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
     if row["pressure_mb"] is not None:
         parts.append(f"{row['pressure_mb']:g} mb")
 
-    sail = _sail(row["sail_state"], sails)
+    sail = sail_text(row["sail_state"], sails)
     if sail:
         parts.append(sail)
 
