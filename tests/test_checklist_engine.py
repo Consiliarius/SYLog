@@ -1,10 +1,12 @@
-"""Tests for the checklist engine-start offer (§14.11).
+"""Tests for the checklist engine-start and engine-stop offers (§14.11).
 
-The load-bearing properties: it is OFFERED, never automatic — saving a checklist
-must not start a timer by itself; the time is editable, because I-WOBBLE's last
-item cannot be ticked unless the engine is already running; a run already open is
-surfaced rather than silently swallowed; and the log line carries both the run it
-started and the checklist that prompted it.
+The load-bearing properties: each is OFFERED, never automatic — saving a checklist
+must not move the timer by itself; the time is editable, because the checklist is
+finished a minute or two after the engine actually changed state; a no-op
+transition (nothing to start / nothing to stop) is surfaced rather than silently
+swallowed; and the log line carries both the run and the checklist that prompted
+it. The two offers share one base view, so the stop cases below also guard that
+the shared machinery still holds.
 
 Headless, like test_settings: a withdrawn App, views driven by their own methods.
 """
@@ -24,6 +26,8 @@ IWOBBLE = {"key": "iwobble", "title": "I-WOBBLE — engine start",
            "items": [{"label": "Isolator — battery isolator on"},
                      {"label": "Exhaust — cooling water flowing at start"}]}
 CLOSEUP = {"key": "closeup", "title": "Close-up", "items": [{"label": "Gas — off"}]}
+SHUTDOWN = {"key": "shutdown", "title": "Engine shutdown", "stops_engine": True,
+            "items": [{"label": "Idle — let it cool at idle a minute"}]}
 
 
 class ChecklistEngineOfferTestCase(unittest.TestCase):
@@ -142,6 +146,58 @@ class ChecklistEngineOfferTestCase(unittest.TestCase):
         self.app.views.current._log()
         run = engine.timer_state(self.d).run
         self.assertIsNone(run["session_id"])
+        self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
+
+    # -- the engine-stop offer (§14.11), the mirror of the start offer ---------
+
+    def _running_since(self, minutes, **kw):
+        engine.start(self.d, datetime.now(timezone.utc) - timedelta(minutes=minutes),
+                     **kw)
+
+    def test_saving_a_stop_checklist_offers_but_stops_nothing_by_itself(self):
+        # The mirror of the start case: the offer is an offer, the run stays open.
+        self._running_since(20)
+        self._run_checklist(SHUTDOWN)._save()
+        self.assertIsInstance(self.app.views.current,
+                              checklists.EngineStopOfferView)
+        self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
+
+    def test_accepting_the_stop_offer_closes_the_run(self):
+        self._running_since(20)
+        self._run_checklist(SHUTDOWN)._save()
+        self.app.views.current._log()
+        self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.STOPPED)
+        self.assertEqual(len(self.d.engine_runs()), 1)
+        self.assertIsNotNone(self.d.engine_runs()[0]["stopped_utc"])   # run closed
+
+    def test_a_stop_offer_with_no_running_engine_is_surfaced_not_swallowed(self):
+        # Nothing to stop — the offer says so rather than vanishing, exactly as a
+        # start offer surfaces an engine already running.
+        self._run_checklist(SHUTDOWN)._save()
+        offer = self.app.views.current
+        self.assertIsInstance(offer, checklists.EngineStopOfferView)
+        self.assertIn("not logged as running", offer._blocked)
+        self.assertFalse(hasattr(offer, "_log_btn"))       # nothing to press
+
+    def test_the_stop_log_line_links_the_run_and_the_checklist(self):
+        self.d.create_session(opened_utc="2026-07-16T08:00:00Z")
+        session = self.d.open_session()
+        self._running_since(20, session_id=session["id"])
+        self._run_checklist(SHUTDOWN)._save()
+        self.app.views.current._log()
+
+        rows = [r for r in self.d.session_entries(session["id"])
+                if r["event_kind"] == "engine_off"]
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["engine_run_id"])
+        self.assertEqual(rows[0]["checklist_run_id"], self.d.checklist_runs()[0]["id"])
+
+    def test_a_plain_checklist_offers_no_stop_either(self):
+        # CLOSEUP here carries neither flag: no offer of either kind.
+        self._running_since(20)
+        self._run_checklist(CLOSEUP)._save()
+        self.assertNotIsInstance(self.app.views.current,
+                                 checklists.EngineStopOfferView)
         self.assertIs(engine.timer_state(self.d).status, engine.TimerStatus.RUNNING)
 
 

@@ -34,6 +34,7 @@
     {
       "key": "closeup",
       "title": "Close-up — end of passage",
+      "stops_engine": true,
       "items": [
         {"label": "Heads — emptied, seacocks closed"},
         {"label": "Seacocks — engine and galley closed"},

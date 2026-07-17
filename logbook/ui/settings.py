@@ -630,8 +630,8 @@ class _ChecklistsSection(_RecordListSection):
              "list worked through there. Reword or retire freely: a completed run "
              "keeps its own copy, so past runs never change. 'Note open' starts "
              "that item's note field open — every item can take a note either way. "
-             "'Starts the engine' makes saving the checklist OFFER to log an engine "
-             "start; it never logs one on its own.")
+             "'Starts the engine' / 'Stops the engine' make saving the checklist "
+             "OFFER to log an engine start or stop; neither logs one on its own.")
     path = ("checklists",)
     noun = "checklist"
     add_label = "Add checklist"
@@ -640,7 +640,8 @@ class _ChecklistsSection(_RecordListSection):
     name_width = 30          # "Close-up — end of passage" clipped at the sails' 22
     child_key, child_editor = "items", _ItemListEditor
     child_noun = "item"
-    record_flags = (("starts_engine", "Starts the engine"),)
+    record_flags = (("starts_engine", "Starts the engine"),
+                    ("stops_engine", "Stops the engine"))
 
 
 # Custom sections render after the scalars — list editors are bulkier. Checklists

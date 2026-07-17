@@ -420,6 +420,20 @@ class SettingsViewTestCase(unittest.TestCase):
         self.app.views.current._save()
         self.assertNotIn("starts_engine", _read_json(self.path)["checklists"][0])
 
+    def test_the_stops_engine_flag_round_trips_and_is_written_only_when_set(self):
+        # The engine-stop mirror of starts_engine (§14.11): the same per-record
+        # flag machinery, so both checkboxes must round-trip independently.
+        self._open()
+        record = self._checklists()._records[0]
+        self.assertFalse(record.flags["stops_engine"].get())
+        record.flags["stops_engine"].set(True)
+        self.app.views.current._save()
+        self.assertTrue(_read_json(self.path)["checklists"][0]["stops_engine"])
+
+        record.flags["stops_engine"].set(False)
+        self.app.views.current._save()
+        self.assertNotIn("stops_engine", _read_json(self.path)["checklists"][0])
+
     def test_sails_have_no_record_flags(self):
         # The flag hook is optional and per-section: a sail does not start engines.
         self._open()

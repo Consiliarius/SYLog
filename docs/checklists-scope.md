@@ -155,7 +155,14 @@ the tool restarts.
 checklist the engine is started for: saving it **offers** to log an engine start
 (§14.11). It never logs one by itself. Shown as a checkbox on the checklist's row
 in the Settings editor, and written only when set, exactly like an item's `note`.
-The example config sets it on I-WOBBLE and not on close-up.
+
+**`"stops_engine": true`** — the mirror, for an engine-shutdown or close-up check:
+saving it **offers** to log an engine *stop* (§14.11), never logging one by
+itself. The two are independent flags, each its own checkbox on the row; a
+checklist would normally carry at most one. The example config sets `starts_engine`
+on I-WOBBLE and `stops_engine` on close-up — the engine is shut down as the boat is
+moored, so logging the stop is part of the end-of-passage routine, back-dated to
+when it actually happened.
 
 ```json
 "checklists": [
@@ -175,6 +182,7 @@ The example config sets it on I-WOBBLE and not on close-up.
   {
     "key": "closeup",
     "title": "Close-up — end of passage",
+    "stops_engine": true,
     "items": [
       {"label": "Heads — emptied, seacocks closed"},
       {"label": "Seacocks — engine and galley closed"},
@@ -699,6 +707,13 @@ commitment to build yet:
   offers to log an engine start after Save **and** after Save & raise issues. It
   exists because the checklist runs precisely when the engine is about to, so the
   offer closes the loop and guards against an unlogged run (§10.2).
+  - **"Log Engine Stop?" counterpart — BUILT, 17 July 2026** (`stops_engine`,
+    `checklists.EngineStopOfferView`). The mirror, for an engine-shutdown or
+    close-up check: it offers to log an engine *stop*, blocked with "nothing to
+    stop" when the timer is not running just as the start offer is blocked with
+    "nothing to start" when it is. Both offers share one base view
+    (`_EngineTimerOfferView`); they differ only in wording, which timer state is
+    blocked, and whether Log calls `engine.start` or `engine.stop`.
   - **Offered, never automatic.** §4.4 records what was confirmed and never
     presumes; a checklist saving itself must not start a timer that accrues the
     hours driving servicing (§7).
