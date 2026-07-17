@@ -68,6 +68,61 @@ resolves from, and Moorwatch's own dependencies must be installed for the system
 - The tool leaves fullscreen on a successful launch so the small window is
   visible; **F11** puts it back.
 
+### Updating both tools, and re-syncing the mooring
+
+`tools/update-boat-tools.sh` pulls SYLog and TSCTide, then re-syncs the mooring
+settings from TSCTide. Run it when there is wifi; it is safe to run without.
+
+**Copy it out of the repo before using it** — `~/Apps` is the suggested home:
+
+```bash
+mkdir -p ~/Apps && cp ~/SYLog/tools/update-boat-tools.sh ~/Apps/
+chmod +x ~/Apps/update-boat-tools.sh
+```
+
+**It must not be run from inside either checkout.** Bash reads a script lazily as
+it executes, so a `git pull` that rewrote the file mid-run could make the shell
+execute garbage. The repo copy is the master; the `~/Apps` copy is the one that
+runs. (So after an update that changes the script, copy it again — the script
+says nothing about this, because a script that reports on its own staleness is a
+script that has outgrown being one.)
+
+Paths and mooring default to `~/SYLog`, `~/Apps/TSCTide` and mooring **64**, and
+each is overridable:
+
+```bash
+SYLOG_DIR=~/src/SYLog MOORING_ID=12 ~/Apps/update-boat-tools.sh
+```
+
+What it does **not** do, deliberately: it never stashes, discards or merges. A
+diverged branch stops with a message rather than making a merge commit
+unattended, and local edits are reported and left alone. A failed pull leaves the
+working version in place and says so.
+
+A desktop launcher, if wanted — `~/.local/share/applications/update-boat-tools.desktop`:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Update SYLog + Moorwatch
+Comment=Pull both tools and re-sync the mooring settings (needs wifi)
+Exec=x-terminal-emulator -e ~/Apps/update-boat-tools.sh
+Terminal=false
+Categories=Utility;
+```
+
+`Exec` runs it in a terminal on purpose: the output *is* the point, and the
+script waits for Enter at the end so a launcher cannot close the window before
+it is read.
+
+**Git auth — check this first if the TSCTide pull fails with `Permission
+denied (publickey)`.** The clone step above uses a **deploy key**, and GitHub
+scopes a deploy key to *one repository*: the same key cannot be added to TSCTide
+as well. If both repos are pulled on this machine, either give TSCTide its own
+deploy key with a `~/.ssh/config` host alias, or use a single account-level SSH
+key (**GitHub → Settings → SSH keys**) which reaches every repo the account can
+see. A public repo cloned over HTTPS needs no key at all.
+
 ## rclone (optional off-machine copy)
 
 The tool does **not** invoke rclone. A `systemd` timer or a NetworkManager hook
