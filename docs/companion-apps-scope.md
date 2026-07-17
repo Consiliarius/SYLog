@@ -139,15 +139,17 @@ Labelled **`Moorwatch ↗`**, not `Moorwatch ▶`: `▶`/`■` are load-bearing 
 *timer running/stopped* (Engine, Auto-log), and an arrow would promise a toggle
 that stops Moorwatch. `↗` says "opens outside this window".
 
-**Two new codepoints — `↗` (U+2197) and `⌂` (U+2302) — are UNVERIFIED on the
-netbook**, and the dev box cannot verify them: it has no DejaVu Sans installed
-(`_preferred_font_family` picks Segoe UI here, DejaVu or Noto there), so a
-coverage measurement taken on Windows silently falls back to another font and
-proves nothing. The `⚙` (U+2699) already ships and renders on the netbook, so a
-glyph in the bar is proven in principle — but this is not that glyph. **If either
-tofus, the fallback is plain text** (`Moorwatch`, and a re-think for the `⌂`);
-it is a one-line change in each case, not a design problem. Check it on the first
-netbook run.
+**Both new codepoints render on the netbook — `↗` (U+2197) and `⌂` (U+2302),
+confirmed 17 July 2026 on the real machine.** The fallback, had either tofued,
+was plain text; it was not needed.
+
+*Worth keeping for the next glyph, because the dev box cannot answer this
+question:* it has no DejaVu Sans installed (`_preferred_font_family` picks Segoe
+UI here, DejaVu or Noto there), so a coverage measurement taken on Windows
+silently falls back to another font and proves nothing — it reports a width for a
+glyph the netbook may not have. The `⚙` (U+2699) already shipping was evidence
+that *a* glyph works in the bar, not that *this* one would. **Only the netbook can
+settle it, so a new glyph ships as unverified until someone looks at it.**
 
 The result goes on
 **`_notice`**, never `_banner`, which `refresh()` rewrites every 250 ms tick
