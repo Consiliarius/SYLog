@@ -73,10 +73,11 @@ resolves from, and Moorwatch's own dependencies must be installed for the system
 `tools/update-boat-tools.sh` pulls SYLog and TSCTide, then re-syncs the mooring
 settings from TSCTide. Run it when there is wifi; it is safe to run without.
 
-**Copy it out of the repo before using it** — `~/Apps` is the suggested home:
+**Copy it out of the repo before using it.** It belongs at `~/Apps/`, *beside*
+the two checkouts rather than inside either:
 
 ```bash
-mkdir -p ~/Apps && cp ~/SYLog/tools/update-boat-tools.sh ~/Apps/
+cp ~/Apps/SYLog/tools/update-boat-tools.sh ~/Apps/
 chmod +x ~/Apps/update-boat-tools.sh
 ```
 
@@ -87,8 +88,8 @@ runs. (So after an update that changes the script, copy it again — the script
 says nothing about this, because a script that reports on its own staleness is a
 script that has outgrown being one.)
 
-Paths and mooring default to `~/SYLog`, `~/Apps/TSCTide` and mooring **64**, and
-each is overridable:
+Defaults match the reference layout — `~/Apps/SYLog`, `~/Apps/TSCTide`, mooring
+**64** — and each is overridable:
 
 ```bash
 SYLOG_DIR=~/src/SYLog MOORING_ID=12 ~/Apps/update-boat-tools.sh
@@ -171,8 +172,9 @@ want on a boat machine. Then:
 
 ```bash
 ssh -T git@github.com        # expect: "Hi ...! You've successfully authenticated"
-git clone git@github.com:Consiliarius/SYLog.git
-cd SYLog
+mkdir -p ~/Apps && cd ~/Apps       # both tools live here: ~/Apps/SYLog,
+git clone git@github.com:Consiliarius/SYLog.git      # ~/Apps/TSCTide, and
+cd SYLog                                             # update-boat-tools.sh beside them
 ```
 
 If port 22 is blocked on the network, add to `~/.ssh/config`:

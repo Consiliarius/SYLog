@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Update SYLog and Moorwatch, then re-sync the mooring settings from TSCTide.
 #
-# Run this ALONGSIDE, not from inside, either repository: bash reads a script
-# lazily as it runs, so a `git pull` that rewrote this file mid-execution could
-# make the shell run garbage. ~/Apps is deliberately outside both checkouts.
+# Lives at ~/Apps/update-boat-tools.sh — BESIDE the two checkouts (~/Apps/SYLog
+# and ~/Apps/TSCTide), never inside one. Bash reads a script lazily as it runs,
+# so a `git pull` that rewrote this file mid-execution could make the shell run
+# garbage. Keep it out of anything it pulls.
 #
 # Needs wifi. Everything here is safe to run without it — it will say what it
 # could not do and change nothing.
@@ -12,7 +13,7 @@ set -uo pipefail    # NOT -e: every step reports, and one failure must not
                     # silently skip the rest. A failed SYLog pull should still
                     # let the mooring re-sync happen.
 
-SYLOG_DIR="${SYLOG_DIR:-$HOME/SYLog}"
+SYLOG_DIR="${SYLOG_DIR:-$HOME/Apps/SYLog}"
 TSCTIDE_DIR="${TSCTIDE_DIR:-$HOME/Apps/TSCTide}"
 MOORING_ID="${MOORING_ID:-64}"
 NET_TIMEOUT=60      # a boat network that is "there" but dead must not hang this
