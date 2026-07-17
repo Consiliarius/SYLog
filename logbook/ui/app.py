@@ -775,15 +775,21 @@ def _big_button(parent, text, command, *, width=0):
     return btn
 
 
-# The launch card's groups (§15.3). Full words here — space is free on the launch
-# view, unlike the one-line session bar, which must abbreviate. The name is
-# repeated deliberately, even though the title above already carries it, so both
-# groups run to four rows and the card balances.
+# The launch card's groups (§15.3), in display order: Identity LEFT, Dimensions
+# RIGHT. Identity leads because it answers "which boat is this?" — the placard
+# question — and it is what the card is read for; dimensions are specification,
+# and §15.4 already treats the two differently (identity is mirrored to meta and
+# exported, dimensions are neither).
+#
+# Full words here — space is free on the launch view, unlike the one-line session
+# bar, which must abbreviate. The name is repeated deliberately, even though the
+# title above already carries it, so both groups run to four rows and the card
+# balances.
 _VESSEL_CARD_GROUPS = (
-    ("Dimensions", (("length", "Length"), ("beam", "Beam"),
-                    ("draught", "Draught"), ("air_draught", "Air draught"))),
     ("Identity", (("name", "Name"), ("ssr", "SSR"), ("callsign", "Callsign"),
                   ("mmsi", "MMSI"))),
+    ("Dimensions", (("length", "Length"), ("beam", "Beam"),
+                    ("draught", "Draught"), ("air_draught", "Air draught"))),
 )
 
 

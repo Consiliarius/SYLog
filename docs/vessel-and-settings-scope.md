@@ -82,12 +82,19 @@ deliberate rather than broken.
 **Launch view — a reference card**, between the title and the button grid (which
 lowers to make room). Two groups, full words, space being free there:
 
-| Dimensions | Identity |
+| Identity | Dimensions |
 |---|---|
-| Length · Beam · Draught · Air draught | Name · SSR · Callsign · MMSI |
+| Name · SSR · Callsign · MMSI | Length · Beam · Draught · Air draught |
 
 The name is repeated in Identity, even though the title above already carries it,
 so both groups run to four rows and the card balances.
+
+*Reversed 17 July 2026* — this table originally put Dimensions left. Identity
+leads because it answers the placard's question, *"which boat is this?"*, which
+is what the card is read for; dimensions are specification. §15.4 already draws
+that distinction and acts on it (identity is mirrored to `meta` and exported;
+dimensions are neither), so the card now reads in the same order as the data
+model's own priority.
 
 **Session view — a slim `S/Y:` bar along the top**, mirroring the status bar at
 the bottom (same `BG_PANEL`, `font_small`, one line ≈ 20 px; the rolling log
