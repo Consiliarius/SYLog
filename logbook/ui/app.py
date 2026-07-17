@@ -1076,9 +1076,17 @@ class SessionView(tk.Frame):
             side="right", padx=2, pady=theme.PAD)
 
         # Row 2: entry presets, plus retrospective Engine…
+        #
+        # This row is FULL: measured at 791px of the 800px design floor (§2.1),
+        # with Checklist included. That is why the sounding preset is labelled
+        # "Depth" and not "Sounding" — the longer word costs 30px and pushes
+        # Checklist off the right edge, where it does not warn, it just is not
+        # there. Row 1 has ~95px spare but not enough to take Checklist either.
+        # A further button here needs a layout re-think, not another squeeze.
         bar2 = tk.Frame(self, bg=theme.BG_PANEL)
         bar2.pack(side="top", fill="x")
-        for label, factory in (("Observation", "observation_form"), ("Sail", "sail_form"),
+        for label, factory in (("Observation", "observation_form"),
+                               ("Depth", "sounding_form"), ("Sail", "sail_form"),
                                ("Engine…", "engine_form"), ("Radio", "radio_form"),
                                ("Crew", "crew_form"), ("Multi…", "multi_form")):
             _big_button(bar2, label,

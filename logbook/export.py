@@ -31,7 +31,9 @@ from datetime import timezone, tzinfo
 from pathlib import Path
 
 from logbook import db, passage
-from logbook.ui.render import checklist_summary, format_position  # pure; import no Tk
+from logbook.ui.render import (  # pure; import no Tk
+    checklist_summary, compass, format_position,
+)
 
 ENTRY_COLUMNS = (
     "id", "session_id", "group_id",
@@ -42,12 +44,21 @@ ENTRY_COLUMNS = (
     "cog_deg", "sog_kn",
     "heading_deg", "heading_ref", "log_nm",
     "sail_plan", "sail_state_json",
-    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
+    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state", "depth_m",
     "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
     "location_name", "engine_run_id", "checklist_run_id", "task_issue_id",
     "radio_channel", "radio_station",
     "remarks",
     "deleted", "deleted_utc", "deleted_reason",
+)
+
+# The tide-observation interchange file (see export_tide_observations). These are
+# TSCTide's column names in TSCTide's order, NOT this tool's conventions — it is
+# the receiving program's import format, so it is spelled the receiving program's
+# way. Everything else exported here is archival and follows §8.
+TIDE_OBSERVATION_COLUMNS = (
+    "Date", "Time", "State", "Wind Direction", "Direction of Lay",
+    "Notes", "Obs Type", "Depth",
 )
 
 ENGINE_COLUMNS = (
@@ -167,12 +178,72 @@ def export_tasks_and_issues(d, out_dir, *, tz: tzinfo = timezone.utc) -> Path:
     return _write_csv(Path(out_dir) / "tasks-and-issues.csv", TASK_ISSUE_COLUMNS, rows)
 
 
-def export_engine_cumulative(d, out_dir) -> Path:
-    """All engine runs, all sessions — regenerated on every export.
+def _tide_observation_row(row) -> dict:
+    """One sounding as a TSCTide observation row.
 
-    This file exists because cumulative engine hours are the one figure that cuts
-    across sessions and drives maintenance: they must not be reconstructible only
-    by concatenating every session file, which is a job nobody will do.
+    Date carries a full ISO-8601 UTC timestamp and Time is left blank. That is
+    deliberate: TSCTide localises a *naive* date+time to its own configured
+    timezone, so exporting "14:30" from a UTC log would land the observation an
+    hour out through British Summer Time — and silently, since an hour-wrong
+    sounding still looks like a plausible sounding. A stamp carrying its offset
+    cannot be misread, and it keeps UTC authoritative (§8).
+
+    State is blank because TSCTide ignores it for soundings; the depth is the
+    measurement. Direction of Lay is blank because this tool does not record
+    which way the boat lay — an empty column is honest, a guessed one is not.
+    """
+    return {
+        "Date": row["timestamp_utc"],
+        "Time": "",
+        "State": "",
+        "Wind Direction": (compass(row["wind_dir_deg"])
+                           if row["wind_dir_deg"] is not None else ""),
+        "Direction of Lay": "",
+        "Notes": row["remarks"] or "",
+        "Obs Type": "sounding",
+        "Depth": row["depth_m"],
+    }
+
+
+def export_tide_observations(d, session_id, out_dir) -> Path | None:
+    """The session's soundings, in TSCTide's observation-upload format.
+
+    Returns the path written, or None when the session holds no soundings — a
+    file of nothing but a header would be noise in the export directory, and the
+    common passage records no depths at all.
+
+    This is an INTERCHANGE file, not an archival one, and differs from its
+    neighbours in two deliberate ways:
+
+      * Its columns are TSCTide's, not §8's. It is read by a program that
+        already has an import format; inventing our own would just require a
+        translator somewhere else.
+      * Soft-deleted rows are EXCLUDED, where the archival files include and
+        flag them (§8). A deleted sounding is one the skipper retracted — a
+        misread, a typo. The archive keeps it because the archive records what
+        happened; calibration must not see it, because feeding a retracted
+        measurement into a seabed estimate is how you get a confidently wrong
+        drying height. The archival copy in the entries file remains, flagged.
+
+    CSV rather than XLSX because this tool's runtime is stdlib-only by invariant
+    (§2.1) and cannot write a workbook. TSCTide's upload endpoint sniffs the body
+    and accepts either.
+    """
+    rows = [_tide_observation_row(r) for r in d.session_entries(session_id)
+            if r["depth_m"] is not None]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r["Date"])
+    path = Path(out_dir) / f"session-{int(session_id):03d}-tide-observations.csv"
+    return _write_csv(path, TIDE_OBSERVATION_COLUMNS, rows)
+
+
+def _cumulative_rows(d) -> list[dict]:
+    """Every engine run, all sessions, each carrying the baseline and its
+    provenance — because those live in config/meta and neither is archived (§8).
+
+    Built once and used twice: by engine-cumulative.csv and by engine.html. The
+    page renders the CSV's own rows, so the two cannot disagree (§14.10.1).
     """
     baseline = d.get_meta("engine_hours_baseline", "0")
     note = d.get_meta("engine_hours_baseline_note", "none")
@@ -182,12 +253,24 @@ def export_engine_cumulative(d, out_dir) -> Path:
         row["engine_hours_baseline"] = baseline
         row["engine_hours_baseline_note"] = note
         rows.append(row)
-    return _write_csv(Path(out_dir) / "engine-cumulative.csv", CUMULATIVE_COLUMNS, rows)
+    return rows
+
+
+def export_engine_cumulative(d, out_dir) -> Path:
+    """All engine runs, all sessions — regenerated on every export.
+
+    This file exists because cumulative engine hours are the one figure that cuts
+    across sessions and drives maintenance: they must not be reconstructible only
+    by concatenating every session file, which is a job nobody will do.
+    """
+    return _write_csv(Path(out_dir) / "engine-cumulative.csv", CUMULATIVE_COLUMNS,
+                      _cumulative_rows(d))
 
 
 def export_session(d, session_id, out_dir, *, sails=None,
                    tz: tzinfo = timezone.utc) -> list[Path]:
-    """Write the four archival files for one session. Re-export overwrites."""
+    """Write the archival files for one session, plus the tide-observation
+    interchange file when there are soundings to send. Re-export overwrites."""
     out_dir = Path(out_dir)
     tag = f"session-{int(session_id):03d}"
     session = d.session(session_id)
@@ -207,6 +290,9 @@ def export_session(d, session_id, out_dir, *, sails=None,
         export_engine_cumulative(d, out_dir),
         export_tasks_and_issues(d, out_dir, tz=tz),
     ]
+    soundings = export_tide_observations(d, session_id, out_dir)
+    if soundings is not None:
+        written.append(soundings)
     return written
 
 

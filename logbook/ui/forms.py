@@ -255,6 +255,38 @@ class WindSea(_Group):
         }
 
 
+class Depth(_Group):
+    """Echo-sounder reading. `category` is `observation`, not a type of its own.
+
+    A sounding is a deck-log observation with one more field populated, so it
+    merges into the same row as any other observation group ticked alongside it
+    (§6.7) and is found by `WHERE depth_m IS NOT NULL` (§5.3).
+
+    The reading is stored exactly as the instrument showed it. Which datum it is
+    referenced to belongs to the boat's installation, and the tide tool that
+    consumes these holds it per mooring; asking for it again here would invite
+    two answers to one question. Converting it to a depth under the keel or a
+    seabed level would store an inference (§4.1) — so the number typed is the
+    number kept.
+    """
+
+    title = "Depth"
+    category = "observation"
+
+    def build(self, parent):
+        box = self._box(parent)
+        row = tk.Frame(box, bg=theme.BG)
+        row.grid(row=0, column=0, sticky="w")
+        self._label(row, "Sounder reads").pack(side="left")
+        self.depth = self._entry(row, width=7)
+        self.depth.pack(side="left", padx=4)
+        self._label(row, "m   (as displayed — not corrected for datum)").pack(side="left")
+        return box
+
+    def collect(self) -> dict:
+        return {"depth_m": _num(self.depth.get())}
+
+
 class Weather(_Group):
     title = "Weather"
     category = "observation"
@@ -532,9 +564,20 @@ def _last_observation_hint(app, session_id):
     return None
 
 
+def _last_sounding_hint(app, session_id):
+    """Greyed hint of the last sounding — never a pre-fill (§4.8)."""
+    for row in app.d.session_entries(session_id, newest_first=True):
+        if row["depth_m"] is not None:
+            time = db.parse_iso_utc(row["timestamp_utc"]).astimezone(app.tz).strftime("%H:%M")
+            return f"last: {row['depth_m']:g} m at {time}"
+    return None
+
+
 def _groups_for(app, session, category):
     if category == "observation":
         return [PositionCourse(app, session), WindSea(app, session), Weather(app, session)]
+    if category == "sounding":
+        return [Depth(app, session)]
     if category == "sail":
         return [SailPlan(app, session)]
     if category == "radio":
@@ -546,6 +589,19 @@ def observation_form(parent, app, session):
     pages = [[PositionCourse(app, session)], [WindSea(app, session)], [Weather(app, session)]]
     return FormView(parent, app, session, title="Observation", pages=pages,
                     hint=_last_observation_hint(app, session["id"]))
+
+
+def sounding_form(parent, app, session):
+    """One field, one page. Reading the sounder at the mooring is a ten-second
+    act, and a form that costs more than the observation will not get used.
+
+    No position group: `FormView` auto-captures the GPS fix for any row that
+    lacks one, so the fix is recorded without being asked for. A skipper who
+    wants to type a position alongside can reach it through `Multi…`.
+    """
+    return FormView(parent, app, session, title="Sounding",
+                    pages=[[Depth(app, session)]],
+                    hint=_last_sounding_hint(app, session["id"]))
 
 
 def sail_form(parent, app, session):
@@ -560,8 +616,12 @@ def crew_form(parent, app, session):
     return FormView(parent, app, session, title="Crew note", pages=[[RemarksGroup(app, session)]])
 
 
+# Tick keys, not categories: "sounding" yields a group whose category is
+# `observation`, so ticking Observation and Sounding together still writes ONE
+# observation row rather than two (§6.7).
 _MULTI_CATS = (
     ("observation", "Observation (position · wind · weather)"),
+    ("sounding", "Sounding (echo sounder depth)"),
     ("sail", "Sail plan"),
     ("radio", "Radio"),
     ("crew", "Crew note"),

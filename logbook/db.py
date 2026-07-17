@@ -28,7 +28,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Entry columns writable at insert time (id/edited/deleted are managed elsewhere).
 _ENTRY_COLUMNS = (
@@ -37,7 +37,7 @@ _ENTRY_COLUMNS = (
     "entry_type", "category", "event_kind", "position_source", "fix_mode",
     "latitude", "longitude", "cog_deg", "sog_kn",
     "heading_deg", "heading_ref", "log_nm", "sail_state",
-    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
+    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state", "depth_m",
     "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
     "location_name", "engine_run_id", "checklist_run_id", "task_issue_id",
     "radio_channel", "radio_station", "remarks",
@@ -58,7 +58,7 @@ _ENTRY_EDITABLE = (
     "timestamp_utc",
     "latitude", "longitude", "cog_deg", "sog_kn",
     "heading_deg", "heading_ref", "log_nm", "sail_state",
-    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state",
+    "wind_dir_deg", "wind_speed_kn", "wind_force_bf", "sea_state", "depth_m",
     "cloud_oktas", "precip_type", "precip_intensity", "visibility", "pressure_mb",
     "location_name", "radio_channel", "radio_station", "remarks",
 )
@@ -325,8 +325,38 @@ def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    """v2 → v3: echo-sounder depth on an entry.
+
+    One nullable column. `depth_m` is the RAW sounder reading in metres, exactly
+    as the instrument displayed it — not a depth below the keel, not a seabed
+    level. Which datum the reading is referenced to (waterline, transducer or
+    keel) is a property of the installation, and the tide tool that consumes
+    these already holds it per mooring; duplicating it here would create a
+    second source of truth that could drift out of step with the first, and
+    converting the reading to a seabed level would store an inference (§4.1).
+    What was observed is a number on a display, so that is what is stored.
+
+    Soundings are not a new category. The schema is flat and nullable, so a
+    sounding is an `observation` row with `depth_m` populated, and finding them
+    is `WHERE depth_m IS NOT NULL AND deleted = 0` — the §5.3 idiom. The
+    one-line renderer likewise picks it up from the populated field.
+
+    Same shape as _migrate_1_to_2: one explicit transaction with the version
+    bump inside it, so a half-applied migration cannot report success (§9).
+    """
+    conn.execute("BEGIN")
+    try:
+        conn.execute("ALTER TABLE entry ADD COLUMN depth_m REAL")
+        conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 # from_version -> the step that carries it to from_version + 1.
-_MIGRATIONS = {1: _migrate_1_to_2}
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
 
 
 def _apply_migration_step(conn: sqlite3.Connection, from_version: int) -> int:

@@ -154,6 +154,10 @@ def one_line(row, *, tz: tzinfo = timezone.utc, sails=None) -> str:
         parts.append(wind)
     if row["sea_state"] is not None:
         parts.append(f"sea {row['sea_state']}")
+    if row["depth_m"] is not None:
+        # "sounded" names the instrument rather than the seabed: the row holds
+        # what the sounder displayed, uncorrected for datum.
+        parts.append(f"sounded {row['depth_m']:g} m")
     if row["cloud_oktas"] is not None:
         parts.append(f"{row['cloud_oktas']}/8")
     precip = precip_text(row["precip_type"], row["precip_intensity"])

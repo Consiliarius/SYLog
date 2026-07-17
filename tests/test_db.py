@@ -27,19 +27,20 @@ class DbTestCase(unittest.TestCase):
         self.addCleanup(d.close)
         return d
 
-    def test_fresh_db_creates_schema_v2(self):
+    def test_fresh_db_creates_schema_v3(self):
         d = self.open()
-        self.assertEqual(db.SCHEMA_VERSION, 2)
-        self.assertEqual(d.schema_version(), 2)
+        self.assertEqual(db.SCHEMA_VERSION, 3)
+        self.assertEqual(d.schema_version(), 3)
         names = {r["name"] for r in d.conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertLessEqual(
             {"meta", "session", "engine_run", "entry", "checklist_run", "task_issue"},
             names)
-        # the two additive entry columns (§14.3)
+        # the additive entry columns: checklists/tasks at v2 (§14.3), depth at v3
         entry_cols = {r["name"] for r in d.conn.execute("PRAGMA table_info(entry)")}
         self.assertIn("checklist_run_id", entry_cols)
         self.assertIn("task_issue_id", entry_cols)
+        self.assertIn("depth_m", entry_cols)
 
     def test_pragmas_applied(self):
         d = self.open()
@@ -317,14 +318,16 @@ class MigrationTestCase(unittest.TestCase):
                 for t in tables}
         return tables, info
 
-    def test_v1_db_migrates_to_v2(self):
+    def test_v1_db_migrates_to_current(self):
+        # A v1 database steps all the way up, one migration at a time.
         self._make_v1_db()
         d = db.open_db(self.path)
         self.addCleanup(d.close)
-        self.assertEqual(d.schema_version(), 2)
+        self.assertEqual(d.schema_version(), db.SCHEMA_VERSION)
+        self.assertEqual(d.schema_version(), 3)
 
     def test_migrated_schema_matches_fresh(self):
-        # "migrated to v2" and "created at v2" must be the same database (§14.8).
+        # "migrated to vN" and "created at vN" must be the same database (§14.8).
         self._make_v1_db()
         migrated = db.open_db(self.path)
         self.addCleanup(migrated.close)
@@ -347,11 +350,14 @@ class MigrationTestCase(unittest.TestCase):
 
         d = db.open_db(self.path)
         self.addCleanup(d.close)
-        self.assertEqual(d.schema_version(), 2)
+        self.assertEqual(d.schema_version(), db.SCHEMA_VERSION)
         self.assertEqual(d.session(1)["opened_utc"], "2026-07-13T14:00:00Z")
         self.assertEqual(len(d.session_entries(1)), 1)
-        # the new column exists and is NULL on the pre-existing row (never destroyed)
+        # every added column exists and is NULL on the pre-existing row, across
+        # both migration steps — data is never destroyed to satisfy a schema
+        # change (§9).
         self.assertIsNone(d.entry(1)["task_issue_id"])
+        self.assertIsNone(d.entry(1)["depth_m"])
 
     def test_migration_writes_verified_backup(self):
         self._make_v1_db()

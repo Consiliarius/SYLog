@@ -44,6 +44,12 @@ tests/              engine / distance / db / export  (generated fixtures)
 docs/               the scope document and deployment notes
 ```
 
+Echo-sounder depths are recorded with the **Depth** preset and exported as
+`session-NNN-tide-observations.csv`, which the companion tide tool (TSCTide)
+imports to calibrate the drying height of a mooring. That file is *interchange,
+not archive*, and breaks two of §8's rules deliberately — read
+[`docs/soundings-scope.md`](docs/soundings-scope.md) before touching it.
+
 ## Running (once built)
 
 ```

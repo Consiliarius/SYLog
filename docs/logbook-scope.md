@@ -233,6 +233,10 @@ CREATE TABLE entry (
     wind_speed_kn   REAL,
     wind_force_bf   INTEGER,         -- Beaufort. Either this OR knots; never derived from the other.
     sea_state       INTEGER,         -- Douglas sea scale 0-9 (sea state only, not swell)
+    depth_m         REAL,            -- RAW echo-sounder reading, as displayed.
+                                     -- Not a depth below the keel, not a seabed
+                                     -- level. Datum belongs to the installation
+                                     -- and lives in the tide tool (§16).
 
     -- weather
     cloud_oktas     INTEGER,         -- 0-8
@@ -398,6 +402,7 @@ The categories are not different *kinds* of entry; they are different **subsets 
 |---|---|---|
 | **Position & course** | position (auto, editable), heading + True/Magnetic toggle, log reading | `observation` |
 | **Wind & sea** | wind direction (16-pt), wind speed (kn) **or** Beaufort, sea state (Douglas 0–9) | `observation` |
+| **Depth** | echo-sounder reading, as displayed (§16) | `observation` |
 | **Weather** | cloud (oktas 0–8), precipitation type, precipitation intensity, visibility, pressure | `observation` |
 | **Sail plan** | one dropdown per sail, generated from `config.json` | `sail` |
 | **Radio** | channel, caller/callsign | `radio` |
@@ -408,10 +413,17 @@ The categories are not different *kinds* of entry; they are different **subsets 
 | Button | Groups | Pages | Rows written |
 |---|---|---|---|
 | **Observation** | Position & course · Wind & sea · Weather | **3** | **1** — the classic deck-log line |
+| **Depth** | Depth | 1 | 1 — a sounding (§16) |
 | **Sail** | Sail plan | 1 | 1 |
 | **Radio** | Radio | 1 | 1 |
 | **Crew** | (remarks only) | 1 | 1 |
 | **Multi…** | user-ticked, **sticky** | tick screen, then steps through | **one per record type touched** |
+
+The preset button row is **at the 800 px design floor** — 791 px measured, with
+Checklist included. That is why the sounding preset is labelled *Depth* and not
+*Sounding*: the longer word costs 30 px and pushes Checklist off the edge, where
+it does not warn, it simply is not there. Another button needs a layout
+re-think, not another squeeze.
 
 **Rules that make this work:**
 
@@ -534,6 +546,7 @@ Stored as JSON in `entry.sail_state`. **Accepted trade:** if sail-usage analysis
 | `session-047-engine.csv` | Engine runs for the session |
 | `session-047-summary.csv` | Session metadata |
 | `engine-cumulative.csv` | **All engine runs, all sessions** — regenerated on each export |
+| `session-047-tide-observations.csv` | **Interchange, not archival** — the session's soundings in the tide tool's import format. Written **only when there are soundings** (§16). |
 
 The fourth exists because cumulative engine hours are the one figure that cuts across sessions, and it drives maintenance. **It must not be reconstructible only by concatenating every session file** — that is a job nobody will do.
 
