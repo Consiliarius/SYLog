@@ -72,8 +72,15 @@ def _session_label(session) -> str:
     opened = session["opened_utc"][:16].replace("T", " ")
     route = " → ".join(x for x in (session["departed_from"], session["bound_for"]) if x)
     status = "open" if not session["closed"] else "closed"
-    distance = (f"{session['distance_og_nm']:.1f} nm DOG"
-                if session["distance_og_nm"] else "")
+    # Both distances, each labelled so neither is read as the other (§6.8): DOG
+    # from GPS, DTW derived from the impeller readings (render, single-source).
+    figures = []
+    if session["distance_og_nm"]:
+        figures.append(f"{session['distance_og_nm']:.1f} nm DOG")
+    dtw = render.distance_through_water(session)
+    if dtw is not None:
+        figures.append(f"{dtw:.1f} nm DTW")
+    distance = "  ".join(figures)
     return f"#{session['id']:>3}  {opened}  {route or '—'}  [{status}]  {distance}"
 
 

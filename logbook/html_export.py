@@ -32,8 +32,8 @@ from string import Template
 
 from logbook import db, engine
 from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
-    engine_baseline_note, engine_method_text, engine_run_when, format_hm,
-    precip_text, split_label, vessel_bar, wind_text,
+    distance_through_water, engine_baseline_note, engine_method_text,
+    engine_run_when, format_hm, precip_text, split_label, vessel_bar, wind_text,
 )
 
 # One shared stylesheet, inlined into every page. Light only: a single theme is
@@ -160,6 +160,15 @@ h2 {
   font-weight: 600;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+}
+/* Two lead figures side by side — distance over ground and through water, each
+   labelled so neither is read as the other (§6.8). */
+.figures { display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
+.dfig { display: flex; flex-direction: column; gap: 0.1rem; }
+.fig-label {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
 }
 .provenance {
   margin: 0.35rem 0 0;
@@ -783,8 +792,19 @@ def render_session(summary, entries, engine_runs, checklist_runs, *,
                                       summary["bound_for"]) if x)
 
     lead = ["<div class=\"card lead\">"]
+    # DOG (GPS-accumulated) and DTW (impeller end − start) side by side, each
+    # labelled. Both are kept; their difference is the tidal set (§6.8).
+    figures = []
     if summary["distance_og_nm"] is not None:
-        lead.append(f'<p class="figure">{summary["distance_og_nm"]:g} nm</p>')
+        figures.append(("DOG", summary["distance_og_nm"]))
+    dtw = distance_through_water(summary)
+    if dtw is not None:
+        figures.append(("DTW", dtw))
+    if figures:
+        cells = "".join(
+            f'<div class="dfig"><span class="figure">{value:g} nm</span>'
+            f'<span class="fig-label">{label}</span></div>' for label, value in figures)
+        lead.append(f'<div class="figures">{cells}</div>')
     lead.append('<dl class="kv">')
     facts = [
         ("Departed", _esc(summary["departed_from"]) or "&mdash;"),

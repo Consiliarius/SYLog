@@ -206,6 +206,31 @@ class HtmlExportTestCase(unittest.TestCase):
             with self.subTest(column=column):
                 self.assertIn(summary[column], page)
 
+    def test_session_page_shows_both_over_ground_and_through_water(self):
+        """§6.8: DOG (GPS) and DTW (impeller end − start) both shown, each
+        labelled so neither is read as the other. The impeller zeros each passage,
+        so 0 → 17.6 is the normal case and DTW is the end reading itself."""
+        self._entry(remarks="under way")
+        self.d.set_session_distance(self.sid, 18.4)
+        self.d.update_session(self.sid, log_start_nm=0.0)
+        self.d.close_session(self.sid, closed_utc="2026-07-13T14:00:00Z",
+                             log_end_nm=17.6)
+        page = self._session_page()
+        self.assertIn("18.4 nm", page)          # DOG, from GPS
+        self.assertIn("DOG", page)
+        self.assertIn("17.6 nm", page)          # DTW = 17.6 − 0
+        self.assertIn("DTW", page)
+
+    def test_through_water_absent_without_both_log_readings(self):
+        """Only a start reading was taken — no DTW figure, DOG still shown. A
+        half-recorded pair yields no through-water distance, never a bare number."""
+        self.d.set_session_distance(self.sid, 18.4)
+        self.d.update_session(self.sid, log_start_nm=0.0)
+        self.d.close_session(self.sid, closed_utc="2026-07-13T14:00:00Z")
+        page = self._session_page()
+        self.assertIn("18.4 nm", page)          # DOG present
+        self.assertNotIn("DTW", page)           # no through-water figure
+
     def test_every_populated_entry_column_reaches_the_page(self):
         """The test §16's soundings needed and did not have.
 

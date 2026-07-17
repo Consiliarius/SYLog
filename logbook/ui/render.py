@@ -74,6 +74,24 @@ def passage_summary(split) -> str:
     return f"{under_way} · stationary {format_hm(split.stationary_min)}"
 
 
+def distance_through_water(row) -> float | None:
+    """Distance through the water over a session: the impeller's end reading
+    minus its start reading. The sibling of the DOG (over-ground) figure — kept
+    beside it, never conflated, so their difference reads as the tidal set (§6.8).
+
+    ``None`` unless both readings were taken AND the end is not below the start.
+    A lower end reading is a log reset mid-passage or a misread, not a negative
+    distance, so it yields no figure rather than a nonsensical one. The impeller
+    may be zeroed each passage; a 0 → X reading is the normal, valid case.
+
+    One place, so the viewer and the HTML export cannot disagree on the figure —
+    the same single-source rule the time split and the engine lines follow."""
+    start, end = row["log_start_nm"], row["log_end_nm"]
+    if start is None or end is None or end < start:
+        return None
+    return end - start
+
+
 def format_position(lat: float, lon: float) -> str:
     """Degrees-and-minutes for display (the stored value is decimal degrees)."""
     return f"{_dm(lat, 'NS', 2)} {_dm(lon, 'EW', 3)}"

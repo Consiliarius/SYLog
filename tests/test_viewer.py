@@ -16,7 +16,8 @@ from pathlib import Path
 
 from logbook import db
 from logbook.ui.app import App
-from logbook.ui.viewer import ViewerEntriesView, ViewerEntryEditView, ViewerSessionsView
+from logbook.ui.viewer import (
+    ViewerEntriesView, ViewerEntryEditView, ViewerSessionsView, _session_label)
 
 
 class ViewerTestCase(unittest.TestCase):
@@ -61,6 +62,17 @@ class ViewerTestCase(unittest.TestCase):
         self.assertIsNotNone(self.d.open_session())      # still open, mid-passage
         view = self._entries_view()
         self.assertIn("VHF 16", view.line(view.rows[0]))
+
+    def test_session_label_shows_both_dog_and_dtw(self):
+        # §6.8: the session line carries DOG (GPS) beside DTW (impeller end −
+        # start), each labelled. The impeller zeros each passage — 0 → 12.4.
+        self.d.set_session_distance(self.sid, 13.1)
+        self.d.update_session(self.sid, log_start_nm=0.0)
+        self.d.close_session(self.sid, closed_utc="2026-07-13T14:00:00Z",
+                             log_end_nm=12.4)
+        label = _session_label(self.d.session(self.sid))
+        self.assertIn("13.1 nm DOG", label)
+        self.assertIn("12.4 nm DTW", label)
 
     def test_detail_header_shows_the_time_split(self):
         # §5.6 under way / stationary on the session-detail header, the sibling

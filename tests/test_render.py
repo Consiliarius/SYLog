@@ -45,6 +45,31 @@ class RenderTestCase(unittest.TestCase):
         self.assertEqual(render.compass(225), "SW")
         self.assertEqual(render.compass(359), "N")
 
+    # -- distance through water (§6.8) --
+
+    def test_dtw_is_end_minus_start(self):
+        self.assertAlmostEqual(
+            render.distance_through_water({"log_start_nm": 1200.0, "log_end_nm": 1247.5}),
+            47.5)
+
+    def test_dtw_zeroed_log_is_the_end_reading(self):
+        # The impeller resets to 0 each passage: 0 → X is valid, DTW is X.
+        self.assertAlmostEqual(
+            render.distance_through_water({"log_start_nm": 0.0, "log_end_nm": 17.6}),
+            17.6)
+
+    def test_dtw_none_when_a_reading_is_missing(self):
+        self.assertIsNone(
+            render.distance_through_water({"log_start_nm": None, "log_end_nm": 17.6}))
+        self.assertIsNone(
+            render.distance_through_water({"log_start_nm": 0.0, "log_end_nm": None}))
+
+    def test_dtw_none_when_end_below_start(self):
+        # A lower end reading is a reset mid-passage or a misread, not a negative
+        # distance — no figure rather than a nonsensical one.
+        self.assertIsNone(
+            render.distance_through_water({"log_start_nm": 40.0, "log_end_nm": 12.0}))
+
     def test_position_format(self):
         self.assertEqual(render.format_position(50.8533, 0.575), "50°51.2'N 000°34.5'E")
         south_west = render.format_position(-10.5, -20.25)
