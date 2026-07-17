@@ -100,21 +100,43 @@ diverged branch stops with a message rather than making a merge commit
 unattended, and local edits are reported and left alone. A failed pull leaves the
 working version in place and says so.
 
-A desktop launcher, if wanted — `~/.local/share/applications/update-boat-tools.desktop`:
+**In a launcher configurator**, the command is the script's **absolute path**,
+with *run in terminal* ticked:
+
+```
+/home/<your-user>/Apps/update-boat-tools.sh
+```
+
+If the configurator has no such option, wrap it yourself:
+
+```
+x-terminal-emulator -e /home/<your-user>/Apps/update-boat-tools.sh
+```
+
+**Absolute, not `~`.** A launcher does not run its command through a shell, so
+`~` and `$HOME` are passed through literally and the launcher simply fails to
+find the file. `echo $HOME` gives the path to paste.
+
+A terminal is required either way — the output *is* the point of running it, and
+the script waits for Enter at the end so a launcher cannot close the window
+before it is read.
+
+Written by hand, that is
+`~/.local/share/applications/update-boat-tools.desktop`:
 
 ```ini
 [Desktop Entry]
 Type=Application
 Name=Update SYLog + Moorwatch
 Comment=Pull both tools and re-sync the mooring settings (needs wifi)
-Exec=x-terminal-emulator -e ~/Apps/update-boat-tools.sh
-Terminal=false
+Exec=/home/<your-user>/Apps/update-boat-tools.sh
+Terminal=true
 Categories=Utility;
 ```
 
-`Exec` runs it in a terminal on purpose: the output *is* the point, and the
-script waits for Enter at the end so a launcher cannot close the window before
-it is read.
+`Terminal=true` rather than an `x-terminal-emulator -e` wrapper: it asks the
+desktop for a terminal instead of naming one, so it does not care which is
+installed.
 
 **Git auth — check this first if the TSCTide pull fails with `Permission
 denied (publickey)`.** The clone step above uses a **deploy key**, and GitHub
