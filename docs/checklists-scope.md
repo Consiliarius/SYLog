@@ -395,10 +395,18 @@ No data is transformed or destroyed; every existing row is untouched.
 
 ---
 
-## 14.10 Parked — HTML review export (future-proofing only)
+## 14.10 HTML review export — BUILT (16 July 2026)
 
-**Decision (15 July 2026): parked, not built now.** Recorded here so the build
-below stays ready for it without carrying its cost.
+**Status: built.** `logbook/html_export.py` renders four pages —
+`index.html`, `tasks.html`, `session-NNN.html`, `engine.html` — generated on
+export into the backup directory, carried to the phone by the `rclone copy` that
+already runs. See §14.10.1 for the spec and how each step went, §14.10.2 for the
+reader-facing requirements it had to meet.
+
+*The framing below is the original park decision (15 July 2026), kept because the
+reasoning it records — why HTML is a third tier, and what it asked of the §14
+build so it would be cheap to add later — is what made the build a week's tail
+rather than a project. It was right: no schema or data change was needed.*
 
 The near-term wish behind it is reading the **Tasks & Issues worklist** and the
 **logbook** on a phone, tablet, or ashore — without carrying the netbook or
@@ -429,7 +437,7 @@ render-and-query concern over what §14 already stores.
 
 ---
 
-### 14.10.1 Resolved spec and build plan (16 July 2026 — in build, step 1 of 6 done)
+### 14.10.1 Resolved spec and build plan (16 July 2026 — BUILT, all 6 steps)
 
 **"Generated HTML" vs "an HTML viewer for the CSVs" — settled: generated.**
 Beyond §14.10 already saying so, a viewer is not technically available:
@@ -533,9 +541,26 @@ across three pages.** Audit it, don't trust it; a fourth page may find a fourth.
    deliberately broad: a review view must never fail a session close, nor look
    like the archive failed. Verified by sabotaging the renderer — the CSVs and
    the backup both still complete, and the note says the CSV is unaffected.
-6. Tests: assert escaping (a remark containing `<script>` must not execute),
-   that every page is self-contained (no `http://`, no `src=`/`href=` off-box),
-   and that a page's figures match the CSV's for the same session.
+6. **BUILT (16 July 2026).** `tests/test_html_export.py` — 26 tests. Escaping
+   (markup fed into every free-text field the schema has, on every page),
+   self-containment (no `http://`, no `<script>`, no `<link>`, no `src=`, and
+   every `href` a sibling page), and parity with the CSV. Plus the §14.10.2 rules
+   the page must not lose: deleted shown struck through with its reason, edited
+   marked, a typed position badged, hours never without provenance, an open run
+   uncounted, a withdrawn one out of the figure but still on the page.
+
+   **Parity is asserted TWO ways**, and the second is the one that earns its
+   keep: the figures match the CSV, *and every populated entry column reaches the
+   page*. The first would not have caught §16's soundings being dropped, because
+   the figures it checks were all still correct.
+
+   *The lesson worth keeping, from mutation-testing these:* the column test as
+   first written **passed with `depth_m` removed entirely**. It asserted that
+   "5.4" appeared, and the same row's `sog_kn` was also 5.4. A test for the exact
+   regression that had just happened, which did not catch it. It now asserts the
+   label→value **pair** a reader sees, with every fixture value deliberately
+   distinct. Every guarantee here was checked by breaking the code and watching
+   the test fail — assertions on a value alone are how a page test rots.
 
 **A page is not free of the features around it.** §16's soundings landed while
 this was being built, adding `depth_m` to `ENTRY_COLUMNS`. The CSV picked it up
@@ -718,7 +743,7 @@ commitment to build yet:
   - If `start_session` were ever added, note that `_write_run()` captures
     `session_id` at save time — a checklist that starts a session would be
     orphaned from the very session it opened unless the run is updated after.
-- **HTML review export** — see §14.10.
+- ~~**HTML review export**~~ — **built 16 July 2026**, no longer backlog. §14.10.
 
 ---
 
