@@ -962,12 +962,31 @@ _SESSION_FIELDS = (
     ("log_start_nm", "Log reading (start), nm"),
 )
 _SESSION_NUMERIC = ("log_start_nm", "log_end_nm")
+# The two fields that are PLACES: they get the same standing-locations picker the
+# Depart/Arrive form offers, so a location configured once is selectable here too,
+# not only typeable (§14).
+_LOCATION_FIELDS = ("departed_from", "bound_for")
 _ALL_SESSION_COLUMNS = tuple(col for col, _ in _SESSION_FIELDS) + ("variation_deg",)
 
 
+def _fill_entry(entry, name):
+    """Drop a picked place name into its free-text entry, replacing what is there.
+    The entry stays typeable — the picker is a shortcut, never the only way in."""
+    entry.delete(0, "end")
+    entry.insert(0, name)
+
+
 def _build_session_fields(app, parent, values):
-    """Returns {column: widget}; ``variation_deg`` maps to an (entry, E/W var) pair."""
+    """Returns {column: widget}; ``variation_deg`` maps to an (entry, E/W var) pair.
+
+    ``departed_from`` and ``bound_for`` also get a place picker beside the text
+    box — standing config locations first, then recent history — the same list
+    the Depart/Arrive form offers (``_merged_locations``), so the two screens
+    cannot drift apart. The text box stays freely typeable and keeps its
+    autopopulated default; picking simply overwrites it.
+    """
     entries = {}
+    places = _merged_locations(app.locations, app.d.location_names())
     row = 0
     for col, label in _SESSION_FIELDS:
         tk.Label(parent, text=label, bg=theme.BG, fg=theme.FG_MUTED,
@@ -978,6 +997,14 @@ def _build_session_fields(app, parent, values):
             entry.insert(0, f"{value:g}" if isinstance(value, float) else str(value))
         entry.grid(row=row, column=1, padx=theme.PAD, pady=2, sticky="w")
         entries[col] = entry
+        if col in _LOCATION_FIELDS and places:
+            var = tk.StringVar(value="")
+            menu = tk.OptionMenu(parent, var, *places,
+                                 command=lambda name, e=entry: _fill_entry(e, name))
+            menu.configure(bg=theme.BG_BUTTON, fg=theme.FG, highlightthickness=0,
+                           activebackground=theme.ACCENT, font=app.font_base)
+            menu.grid(row=row, column=2, padx=2, sticky="w")
+            entry._place_menu = menu      # reachable for tests and future edits
         row += 1
 
     # Magnetic variation: a magnitude plus E/W. Nobody should have to type a

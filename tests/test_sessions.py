@@ -28,6 +28,12 @@ def a_fix(*, mode=3, lat=50.85, lon=0.575, sog=5.0):
                    sog_kn=sog, cog_deg=90.0)
 
 
+def _menu_labels(optionmenu):
+    """The option strings a Tk OptionMenu offers, in order."""
+    inner = optionmenu["menu"]
+    return [inner.entrycget(i, "label") for i in range(inner.index("end") + 1)]
+
+
 class SessionTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -35,9 +41,9 @@ class SessionTestCase(unittest.TestCase):
         self.d = db.open_db(Path(self._tmp.name) / "logbook.db")
         self.addCleanup(self.d.close)
 
-    def _app(self):
+    def _app(self, **kwargs):
         try:
-            app = App(self.d, start_reader=False, distance_persist_min=0.0)
+            app = App(self.d, start_reader=False, distance_persist_min=0.0, **kwargs)
         except tk.TclError as exc:
             self.skipTest(f"no Tk display: {exc}")
         app.root.withdraw()
@@ -81,6 +87,42 @@ class SessionTestCase(unittest.TestCase):
         self.assertEqual(session["skipper"], "A. Skipper")
         self.assertEqual(session["bound_for"], "Boulogne")
         self.assertIsInstance(app.views.current, SessionView)
+
+    def test_start_place_fields_offer_configured_locations(self):
+        # The bug: standing locations were selectable on Depart/Arrive but NOT on
+        # the Start Session screen. Now From and Bound for carry the same picker.
+        app = self._app(locations=["Home berth", "Fuel pontoon"])
+        view = forms.SessionStartView(app._content, app)
+        for col in ("departed_from", "bound_for"):
+            labels = _menu_labels(view.entries[col]._place_menu)
+            self.assertIn("Home berth", labels)
+            self.assertIn("Fuel pontoon", labels)
+        for col in ("skipper", "crew"):           # not places — no picker
+            self.assertFalse(hasattr(view.entries[col], "_place_menu"))
+
+    def test_picking_a_location_fills_the_field_and_saves(self):
+        app = self._app(locations=["Home berth"])
+        view = forms.SessionStartView(app._content, app)
+        menu = view.entries["bound_for"]._place_menu
+        menu["menu"].invoke(_menu_labels(menu).index("Home berth"))   # pick, as a user does
+        self.assertEqual(view.entries["bound_for"].get(), "Home berth")
+        view._start()
+        self.assertEqual(self.d.open_session()["bound_for"], "Home berth")
+
+    def test_session_edit_place_fields_also_offer_locations(self):
+        # Both screens build via _build_session_fields, so Edit details gets it too.
+        app = self._app(locations=["Home berth"])
+        session = self._open_session()
+        edit = forms.SessionEditView(app._content, app, session)
+        self.assertIn("Home berth",
+                      _menu_labels(edit.entries["departed_from"]._place_menu))
+
+    def test_no_picker_when_no_locations_configured(self):
+        # With nothing standing and no history, the fields stay plain text boxes.
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        for col in ("departed_from", "bound_for"):
+            self.assertFalse(hasattr(view.entries[col], "_place_menu"))
 
     def test_skip_opens_immediately_with_nulls_and_details_can_fix_it(self):
         app = self._app()
