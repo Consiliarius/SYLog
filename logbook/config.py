@@ -204,6 +204,23 @@ class Config:
         absent, so a config written before this key existed still loads."""
         return float(self._data.get("backup", {}).get("interval_min", 30))
 
+    # -- export ---------------------------------------------------------------
+
+    @property
+    def html_export(self) -> bool:
+        """Generate the HTML review pages beside the CSVs (§14.10.1).
+
+        Per MACHINE, not per export: the netbook is the one that might want this
+        off, and that is a standing property of the machine rather than a
+        decision to take at each End Session.
+
+        Defaults ON, so a config written before this key existed still loads and
+        still gets the pages. Turning it off costs nothing archival — the CSVs
+        are the record (§8) and are written either way; only the review view is
+        skipped.
+        """
+        return bool(self._data.get("export", {}).get("html", True))
+
 
 def load(config_path: str | Path, *, example_path: str | Path) -> Config:
     """Load config.json, copying the example on first run."""

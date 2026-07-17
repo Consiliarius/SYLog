@@ -63,6 +63,9 @@
     "retention": 10,
     "interval_min": 30
   },
+  "export": {
+    "html": true
+  },
   "paths": {
     "database": "~/logbook/logbook.db",
     "backup_dir": "~/OneDrive/logbook/"

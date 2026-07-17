@@ -30,7 +30,7 @@ import tempfile
 from datetime import timezone, tzinfo
 from pathlib import Path
 
-from logbook import db, passage
+from logbook import db, html_export, passage
 from logbook.ui.render import (  # pure; import no Tk
     checklist_summary, compass, format_position,
 )
@@ -115,6 +115,27 @@ def _write_csv(path: Path, columns, rows) -> Path:
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return path
+
+
+def _write_text(path: Path, text: str) -> Path:
+    """Write atomically, on _write_csv's discipline: a temp file in the same
+    directory, then ``os.replace``.
+
+    The pages land in a directory ``rclone copy`` is watching, so a half-written
+    one could be synced to the phone as though it were whole. ``newline=""``
+    keeps the '\\n' endings the string already has, on Windows too.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    os.close(handle)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -293,6 +314,52 @@ def export_session(d, session_id, out_dir, *, sails=None,
     soundings = export_tide_observations(d, session_id, out_dir)
     if soundings is not None:
         written.append(soundings)
+    return written
+
+
+def export_html(d, session_id, out_dir, *, sails=None,
+                tz: tzinfo = timezone.utc) -> list[Path]:
+    """Regenerate the HTML review pages beside the CSVs (§14.10, §14.10.1 step 5).
+
+    **Deliberately not called from ``export_session``.** The CSVs are the
+    archival record (§8); HTML is a third tier, a review view. Wiring the pages
+    into the export would put the archive at the mercy of a rendering bug in a
+    page — an inverted relationship. The caller runs this separately, so a
+    failure here is reported against the pages and leaves the export that already
+    succeeded alone.
+
+    Rendered from the SAME row dicts the CSV writers use, so a page cannot
+    disagree with the archive beside it (§14.10.1). Cross-cutting pages
+    regenerate every time, exactly as engine-cumulative.csv already does; the
+    session page is written for the session being exported. Filenames are stable,
+    so ``rclone copy`` overwrites rather than accumulates.
+    """
+    out_dir = Path(out_dir)
+    written: list[Path] = []
+    session = d.session(session_id)
+
+    if session is not None:
+        written.append(_write_text(
+            out_dir / f"session-{int(session_id):03d}.html",
+            html_export.render_session(
+                _summary_row(d, session),
+                [_entry_row(r, tz=tz, sails=sails)
+                 for r in d.session_entries_including_deleted(session_id)],
+                [{col: r[col] for col in ENGINE_COLUMNS}
+                 for r in d.engine_runs_including_deleted(session_id)],
+                [_checklist_row(r, tz=tz)
+                 for r in d.checklist_runs_including_deleted(session_id)],
+                tz=tz)))
+
+    tasks = [_task_issue_row(r, tz=tz) for r in d.task_issues_including_deleted()]
+    open_count = sum(1 for r in tasks
+                     if r["status"] != "done" and not r["deleted"])
+    written.append(_write_text(out_dir / "tasks.html", html_export.render_tasks(
+        tasks, tz=tz, vessel=d.get_meta("vessel_name", ""))))
+    written.append(_write_text(out_dir / "engine.html", html_export.render_engine(
+        d, _cumulative_rows(d), tz=tz)))
+    written.append(_write_text(out_dir / "index.html", html_export.render_index(
+        d, d.sessions(), open_count, tz=tz)))
     return written
 
 

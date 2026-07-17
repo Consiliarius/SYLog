@@ -108,6 +108,7 @@ class App:
         backup_dir=None,
         backup_retention: int = 10,
         backup_interval_min: float = 30.0,
+        html_export: bool = True,
         start_reader: bool = True,
     ) -> None:
         self.d = d
@@ -124,6 +125,10 @@ class App:
         self.backup_dir = backup_dir
         self.backup_retention = backup_retention
         self.backup_interval_min = backup_interval_min
+        # Per MACHINE (§14.10.1 step 5): the netbook is the one that might want
+        # the pages off. Off costs nothing archival — the CSVs are written either
+        # way; only the review view is skipped.
+        self.html_export = html_export
         self._last_backup_changes: int | None = None
         self._backup_status: tuple[str, bool] | None = None  # (text, ok) for the bar
         self.backdate_tolerance_sec = backdate_tolerance_sec
@@ -496,11 +501,16 @@ class App:
     # -- export + backup on session close (§3.6, §6.2) -------------------------
 
     def export_and_backup(self, session_id) -> list[str]:
-        """Regenerate the CSVs and take a verified snapshot. Returns notes.
+        """Regenerate the CSVs, the HTML review pages and a verified snapshot.
 
-        Failures are reported, never swallowed: the backup routine is a
-        requirement, not a nicety (§10.3), so a silent failure would be the worst
-        possible outcome.
+        Returns notes. Failures are reported, never swallowed: the backup routine
+        is a requirement, not a nicety (§10.3), so a silent failure would be the
+        worst possible outcome.
+
+        The three are attempted INDEPENDENTLY, in tier order (§8, §14.10): the
+        CSVs are the archival record, the backup protects the database, and the
+        HTML is a review view. A page that fails to render must not take either
+        of the other two down with it.
         """
         from logbook import backup, export
         if self.backup_dir is None:
@@ -512,6 +522,19 @@ class App:
             notes.append(f"CSV exported ({len(written)} files)")
         except OSError as exc:
             notes.append(f"CSV export FAILED: {exc}")
+
+        if self.html_export:
+            try:
+                pages = export.export_html(self.d, session_id, self.backup_dir,
+                                           sails=self.sails, tz=self.tz)
+                notes.append(f"HTML review pages written ({len(pages)})")
+            except Exception as exc:      # noqa: BLE001 — see below
+                # BROAD, and deliberately so. The CSVs are already written and
+                # verified by this point; a rendering bug in a third-tier review
+                # page must not fail the session close, and must not look like
+                # the archive failed. It says so, and says the CSV is intact.
+                notes.append(f"HTML review pages FAILED ({exc}) — "
+                             "the CSV export is unaffected")
         if self.db_path is None:
             notes.append("no database path known — backup skipped")
             return notes

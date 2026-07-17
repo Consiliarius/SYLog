@@ -518,11 +518,35 @@ across three pages.** Audit it, don't trust it; a fourth page may find a fourth.
    and the run card. `render._ENGINE_METHODS` was the third private renderer to
    promote — `engine_method_text` — because 'timer' vs 'entered, duration' IS
    the honesty §7 is about, and index.html now links here.
-5. Wire into `export.py` beside the CSV writers; a `--no-html` escape hatch if
-   generation ever proves slow on the netbook.
+5. **BUILT (16 July 2026).** `export.export_html`, beside the CSV writers, from
+   the same row dicts. The escape hatch is **config, not a flag**:
+   `export.html` (default `true`), read per machine — the netbook is the one that
+   might want it off, and that is a standing property of the machine, not a
+   decision to take at each End Session. Off costs nothing archival: the CSVs are
+   written either way.
+
+   **Not called from `export_session`, deliberately.** The CSVs are the record
+   (§8); the pages are a third tier. Wiring them into the export would put the
+   archive at the mercy of a rendering bug in a page — the archival relationship
+   inverted. `app.export_and_backup` runs the three independently in tier order
+   (CSV, then pages, then the verified backup), and the page's `except` is
+   deliberately broad: a review view must never fail a session close, nor look
+   like the archive failed. Verified by sabotaging the renderer — the CSVs and
+   the backup both still complete, and the note says the CSV is unaffected.
 6. Tests: assert escaping (a remark containing `<script>` must not execute),
    that every page is self-contained (no `http://`, no `src=`/`href=` off-box),
    and that a page's figures match the CSV's for the same session.
+
+**A page is not free of the features around it.** §16's soundings landed while
+this was being built, adding `depth_m` to `ENTRY_COLUMNS`. The CSV picked it up
+by construction — the row dict drives the columns — but the **HTML did not**: it
+names its facts explicitly, so a new column is silently absent from the timeline
+until someone adds it. It is rendered now, labelled **"Sounded (m)"** and never
+"Depth", per §16: the row holds what the instrument displayed, uncorrected for
+datum, and a seabed level needs the tide, the datum and the draught, none of
+which are there. *The lesson for the next column added to `entry`: the CSV
+follows automatically, the page does not. `_entry_facts` in `html_export.py` is
+the list to extend.*
 
 **Explicitly still out of scope:** any *write*-capable web frontend. §11 and
 §14.10 both hold — read-only, no concurrency model, no network dependency in the

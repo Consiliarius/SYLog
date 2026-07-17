@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> None:
         backup_dir=cfg.backup_dir,
         backup_retention=cfg.backup_retention,
         backup_interval_min=cfg.backup_interval_min,
+        html_export=cfg.html_export,
     )
 
     if args.check:

@@ -32,8 +32,8 @@ from string import Template
 
 from logbook import db, engine
 from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
-    checklist_summary, engine_baseline_note, engine_method_text, engine_run_when,
-    format_hm, precip_text, split_label, vessel_bar, wind_text,
+    engine_baseline_note, engine_method_text, engine_run_when, format_hm,
+    precip_text, split_label, vessel_bar, wind_text,
 )
 
 # One shared stylesheet, inlined into every page. Light only: a single theme is
@@ -596,6 +596,12 @@ def _entry_facts(row) -> list[tuple[str, str]]:
         facts.append(("Wind", _esc(wind)))
     if row["sea_state"] is not None:
         facts.append(("Sea state", _esc(row["sea_state"])))
+    if row["depth_m"] is not None:
+        # "Sounded", never "Depth" (§16): the row holds what the instrument
+        # displayed, uncorrected for datum. A seabed level needs the tide, the
+        # datum and the draught, none of which are here — so the label names the
+        # instrument, exactly as render.one_line's "sounded 5.4 m" does.
+        facts.append(("Sounded (m)", _esc(f"{row['depth_m']:g}")))
     if row["cloud_oktas"] is not None:
         facts.append(("Cloud (oktas)", _esc(f"{row['cloud_oktas']}/8")))
     precip = precip_text(row["precip_type"], row["precip_intensity"])
@@ -752,7 +758,9 @@ def _checklist_html(runs, *, tz: tzinfo) -> str:
             f"<li{cls}><div class=\"task-head\">{_badge('Check')}{marks}"
             f'<span class="muted">'
             f'{_esc(_when(r["completed_utc"], tz=tz, fmt="%H:%M"))}</span></div>'
-            f'<p class="task-desc">{_esc(checklist_summary(r["title"], r["items_json"]))}</p>'
+            # 'result' is the CSV's own legible column, composed by
+            # _checklist_row from the run's snapshot — taken, not recomputed.
+            f'<p class="task-desc">{_esc(r["result"])}</p>'
             f'<ul class="ticks">{"".join(ticks)}</ul>'
             + (f'<p class="remark">{_esc(r["remarks"])}</p>' if r["remarks"] else "")
             + "</li>")
