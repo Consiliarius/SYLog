@@ -212,6 +212,12 @@ a nudge.
   deepest, and a checklist is a sequence worked top to bottom (I-WOBBLE is a
   *mnemonic*). Without it, a misplaced item means remove, re-add at the end,
   retype.
+- **Record lists reorder too** (▲▼, same control). The outer order is load-bearing
+  as well: checklists are buttons worked top to bottom on the Checklists screen,
+  and sails and locations fill their dropdowns in list order. Moving a checklist
+  off the top used to mean delete-and-recreate; now it is one press. The wider
+  checklist row (two engine-flag checkboxes plus the ▲▼) took the title field down
+  to the sails' 22 to stay inside the screen — a longer title scrolls in the field.
 
 **Writing config is a new capability** — the tool has only ever read it (plus the
 first-run copy). Three non-negotiables follow:
@@ -252,6 +258,7 @@ visible consequences, accepted:
 | `note: true` written only when set; absent means false | It only pre-expands the run form's field (§14.4) — it never makes a note required, and writing `false` everywhere is noise |
 | Records collapse by default; a newly added one opens | Everything expanded measured ~2600 px against a 600 px screen, burying the scalars; collapsed the page is 1670 px |
 | Child lists reorder with ▲▼ | Order is load-bearing: reefs run full to deepest, and I-WOBBLE is a mnemonic — remove-and-retype is not a reordering story |
+| Record lists reorder with ▲▼ too | The outer order is load-bearing as well: checklists are buttons top-to-bottom, sails and locations fill dropdowns in order; the wider checklist row took the title field to 22 to stay on screen |
 | Config changes take effect on restart | One rule beats a half-applied state; the running timers are where live-reapply would go wrong |
 
 ---

@@ -502,8 +502,15 @@ class _RecordListSection:
         record = _Record(frame=frame, key=key, name=name, children=children, raw=raw,
                          toggle=toggle, count=count, flags=flags)
         toggle.configure(command=lambda: self._set_expanded(record, not record.expanded))
-        _small_button(head, "Remove", lambda: self._remove(record),
-                      font=self.app.font_small).pack(side="left")
+        # Order is load-bearing: checklists are buttons worked top-to-bottom on the
+        # Checklists screen, and sails and locations fill their dropdowns in this
+        # order. So reorder in place rather than remove-and-re-add — the same ▲/▼
+        # the child lists (items, reefs) already carry.
+        for text, command in (("▲", lambda: self._move(record, -1)),
+                              ("▼", lambda: self._move(record, 1)),
+                              ("Remove", lambda: self._remove(record))):
+            _small_button(head, text, command,
+                          font=self.app.font_small).pack(side="left", padx=(0, 2))
         self._set_expanded(record, expanded)
         self._records.append(record)
 
@@ -531,6 +538,25 @@ class _RecordListSection:
     def _remove(self, record: _Record) -> None:
         self._records.remove(record)
         record.frame.destroy()
+
+    def _repack(self) -> None:
+        """``_records`` is the order of record; the packing is redrawn from it.
+
+        Only a move needs it, and re-packing preserves each record's
+        expanded/collapsed state — its children live INSIDE the frame being
+        re-packed, so they ride along untouched. Mirrors ``_ChildListEditor``.
+        """
+        for record in self._records:
+            record.frame.pack_forget()
+        for record in self._records:
+            record.frame.pack(fill="x", pady=2)
+
+    def _move(self, record: _Record, delta: int) -> None:
+        i = self._records.index(record)
+        j = i + delta
+        if 0 <= j < len(self._records):       # the ends simply do not move
+            self._records[i], self._records[j] = self._records[j], self._records[i]
+            self._repack()
 
     def _is_blank(self, record: _Record) -> bool:
         """An 'Add' that was thought better of — dropped, not rejected, exactly as
@@ -626,22 +652,26 @@ class _ChecklistsSection(_RecordListSection):
     """
 
     heading = "Checklists"
-    blurb = ("Each becomes a button on the Checklists screen, and its items the "
-             "list worked through there. Reword or retire freely: a completed run "
-             "keeps its own copy, so past runs never change. 'Note open' starts "
-             "that item's note field open — every item can take a note either way. "
-             "'Starts the engine' / 'Stops the engine' make saving the checklist "
-             "OFFER to log an engine start or stop; neither logs one on its own.")
+    blurb = ("Each becomes a button on the Checklists screen — ▲/▼ set that "
+             "order — and its items the list worked through there. Reword or "
+             "retire freely: a completed run keeps its own copy, so past runs "
+             "never change. 'Note open' starts that item's note field open — every "
+             "item can take a note either way. 'Starts engine' / 'Stops engine' "
+             "make saving the checklist OFFER to log an engine start or stop; "
+             "neither logs one on its own.")
     path = ("checklists",)
     noun = "checklist"
     add_label = "Add checklist"
     id_key, id_label = "key", "Key"
     name_key, name_label = "title", "Title"
-    name_width = 30          # "Close-up — end of passage" clipped at the sails' 22
+    # The row also carries two engine-flag checkboxes and the ▲/▼ reorder
+    # controls, so the title field takes the sails' 22 rather than a wider 30 —
+    # a longer title scrolls within the field, keeping the row inside the screen.
+    name_width = 22
     child_key, child_editor = "items", _ItemListEditor
     child_noun = "item"
-    record_flags = (("starts_engine", "Starts the engine"),
-                    ("stops_engine", "Stops the engine"))
+    record_flags = (("starts_engine", "Starts engine"),
+                    ("stops_engine", "Stops engine"))
 
 
 # Custom sections render after the scalars — list editors are bulkier. Checklists

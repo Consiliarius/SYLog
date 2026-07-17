@@ -315,6 +315,35 @@ class SettingsViewTestCase(unittest.TestCase):
         reefs._move(reefs._rows[2], 1)               # off the bottom: no move
         self.assertEqual(reefs.collect(), ["full", "2nd reef", "1st reef"])
 
+    def test_reordering_the_record_list(self):
+        # Order is load-bearing for the OUTER list too: checklists are buttons
+        # worked top to bottom on the Checklists screen, and sails and locations
+        # fill their dropdowns in this order. The same ▲/▼ as the child lists.
+        self._open()
+        section = self._checklists()
+        section._add_record({"key": "closeup", "title": "Close-up", "items": []})
+        section._add_record({"key": "predep", "title": "Pre-departure", "items": []})
+        keys = lambda: [r["key"] for r in section.collect()]
+        self.assertEqual(keys(), ["iwobble", "closeup", "predep"])
+
+        section._move(section._records[0], 1)        # iwobble down one
+        self.assertEqual(keys(), ["closeup", "iwobble", "predep"])
+        section._move(section._records[0], -1)       # off the top: no move
+        self.assertEqual(keys(), ["closeup", "iwobble", "predep"])
+        section._move(section._records[2], 1)        # off the bottom: no move
+        self.assertEqual(keys(), ["closeup", "iwobble", "predep"])
+
+    def test_reordering_records_survives_a_save(self):
+        # The user's case: move a checklist off the top and have the new order
+        # persist to disk, not just on screen.
+        view = self._open()
+        section = self._checklists()
+        section._add_record({"key": "closeup", "title": "Close-up", "items": []})
+        section._move(section._records[0], 1)        # iwobble below close-up
+        view._save()
+        self.assertEqual([c["key"] for c in _read_json(self.path)["checklists"]],
+                         ["closeup", "iwobble"])
+
     def test_records_collapse_and_the_child_list_survives_it(self):
         # Collapsing pack_forgets the child editor, it never destroys it: a
         # collapsed record must save exactly as an open one does.
