@@ -32,8 +32,8 @@ from string import Template
 
 from logbook import db, engine
 from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
-    checklist_summary, engine_baseline_note, engine_run_when, format_hm,
-    precip_text, split_label, vessel_bar, wind_text,
+    checklist_summary, engine_baseline_note, engine_method_text, engine_run_when,
+    format_hm, precip_text, split_label, vessel_bar, wind_text,
 )
 
 # One shared stylesheet, inlined into every page. Light only: a single theme is
@@ -139,6 +139,21 @@ h2 {
 .kv dt { color: var(--ink-soft); font-size: 0.9rem; }
 .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* The baseline's provenance sits UNDER its label, never beside the figure —
+   §7's caveat is part of the row, not a footnote to it. */
+.kv .sub {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  max-width: 22rem;
+}
+
+/* The row the sum lands on. */
+.kv .total { border-top: 2px solid var(--rule); border-bottom: 0; }
+.kv .total dt { color: var(--ink); font-weight: 600; }
+.kv .total dd { font-weight: 600; }
+
 /* A figure that leads a page: big, but never without its provenance (§7). */
 .figure {
   font-size: 2rem;
@@ -197,7 +212,8 @@ h2 {
 .task-desc { margin: 0 0 0.25rem; line-height: 1.4; }
 
 a.row-link { color: inherit; text-decoration: none; display: block; }
-a.row-link:hover .task-desc { color: var(--accent); }
+a.row-link:hover .task-desc, a.row-link:hover .more { color: var(--accent); }
+.more { color: var(--accent); white-space: nowrap; }
 
 .muted { color: var(--ink-soft); font-size: 0.9rem; }
 .empty { color: var(--ink-faint); font-style: italic; padding: 0.5rem 0; }
@@ -466,13 +482,18 @@ def render_index(d, sessions, open_count: int, *,
     rec = engine.reconciliation(d)
     bar = vessel_bar(_vessel_reference(d))
 
+    # §7: the figure NEVER appears without its provenance — a bare number invites
+    # false confidence, on a phone as much as on the bar (§14.10.2). engine.html
+    # has the full reconciliation; this is the caveat in one line.
     parts = [
         '<div class="card lead">',
+        '<a class="row-link" href="engine.html">',
         f'<p class="figure">{rec.total_h:,.1f} h</p>',
-        '<p class="provenance">Engine hours: baseline '
+        '<p class="provenance">Engine hours &mdash; baseline '
         f'{rec.baseline_h:,.1f} h ({_esc(engine_baseline_note(rec.note))})'
-        f' + {rec.logged_h:,.1f} h logged since.</p>',
-        "</div>",
+        f' + {rec.logged_h:,.1f} h logged since. '
+        "<span class=\"more\">See every run &rarr;</span></p>",
+        "</a></div>",
     ]
 
     parts.append('<ul class="stack"><li class="card">'
@@ -659,23 +680,50 @@ def _timeline(rows, *, tz: tzinfo) -> str:
         for r in rows) + "</ul>"
 
 
+def _engine_card(row, *, tz: tzinfo, show_session: bool = False) -> str:
+    """One engine run.
+
+    ``When`` is '—' for a ``manual_duration`` run, which genuinely has no times:
+    a duration typed in afterwards records how long, never when. ``Method`` is
+    always shown — a timed run and one typed from memory are worth different
+    amounts of trust, and §7 is precisely about not hiding that.
+
+    ``show_session`` on engine.html, where runs from every session (and the
+    mooring runs belonging to none) share one list; redundant on a session page.
+    """
+    marks = [_badge("Engine")]
+    if row["deleted"]:
+        marks.append(_badge("deleted", kind="flag"))
+    elif row["open"]:
+        marks.append(_badge("running", kind="flag"))
+
+    facts = [("When", _esc(engine_run_when(row, tz=tz))),
+             # An open run reads 'running', never an elapsed time: its
+             # duration_min is still NULL and it is NOT in the cumulative
+             # figure. A number here would disagree with the total above it.
+             ("Duration", _esc("running" if row["open"]
+                               else format_hm(row["duration_min"] or 0))),
+             ("Method", _esc(engine_method_text(row["method"])))]
+    if show_session:
+        facts.append(("Session", _esc(f"{int(row['session_id']):03d}")
+                      if row["session_id"] else "no session"))
+    if row["notes"]:
+        facts.append(("Notes", _esc(row["notes"])))
+    if row["deleted"] and row["deleted_reason"]:
+        facts.append(("Withdrawn", _esc(row["deleted_reason"])))
+
+    cls = "card deleted" if row["deleted"] else "card"
+    return (f'<li class="{cls}"><div class="task-head">{"".join(marks)}</div>'
+            + '<dl class="kv">' + "".join(
+                f"<div><dt>{_esc(k)}</dt><dd>{v}</dd></div>" for k, v in facts)
+            + "</dl></li>")
+
+
 def _engine_rows_html(runs, *, tz: tzinfo) -> str:
     if not runs:
         return _empty("No engine runs logged for this session.")
-    out = []
-    for r in runs:
-        marks = _badge("deleted", kind="flag") if r["deleted"] else ""
-        cls = ' class="card deleted"' if r["deleted"] else ' class="card"'
-        facts = [("When", _esc(engine_run_when(r, tz=tz))),
-                 ("Duration", _esc("running" if r["open"]
-                                   else format_hm(r["duration_min"] or 0)))]
-        if r["notes"]:
-            facts.append(("Notes", _esc(r["notes"])))
-        out.append(f"<li{cls}><div class=\"task-head\">{_badge('Engine')}{marks}</div>"
-                   + '<dl class="kv">' + "".join(
-                       f"<div><dt>{_esc(k)}</dt><dd>{v}</dd></div>"
-                       for k, v in facts) + "</dl></li>")
-    return '<ul class="stack">' + "".join(out) + "</ul>"
+    return '<ul class="stack">' + "".join(
+        _engine_card(r, tz=tz) for r in runs) + "</ul>"
 
 
 def _checklist_html(runs, *, tz: tzinfo) -> str:
@@ -756,3 +804,75 @@ def render_session(summary, entries, engine_runs, checklist_runs, *,
     when = _when(summary["opened_utc"], tz=tz, fmt="%d %B %Y")
     return page(f"Session {number:03d}", "".join(parts),
                 subtitle=" · ".join(x for x in (passage, when) if x) or None)
+
+
+# -- engine.html ---------------------------------------------------------------
+
+def _reconciliation_html(rec, *, counted: int, running: bool) -> str:
+    """The §7 figure, itemised — baseline with its provenance, runs logged since,
+    then the sum. Mirrors ``engine_log.EngineHoursView``'s header (§14.11).
+
+    **Never a bare total.** §7: *"47.3 hours that are all true is a better figure
+    than 1,847 of which 1,800 are a guess, because in the latter the error is
+    invisible."* A total alone re-hides exactly what §7 wants visible — on a
+    phone as much as at the chart table (§14.10.2).
+    """
+    rows = [
+        ("Baseline", engine_baseline_note(rec.note), f"{rec.baseline_h:,.1f} h"),
+        ("Logged since", f"{counted} run{'' if counted == 1 else 's'}",
+         f"{rec.logged_h:,.1f} h"),
+    ]
+    out = ['<div class="card lead">',
+           f'<p class="figure">{rec.total_h:,.1f} h</p>',
+           # Says what the figure IS made of, and does not promise the rounded
+           # decimals below sum to the rounded total — each is rounded to 1dp
+           # independently, exactly as the engine-hours view does it (§14.11).
+           '<p class="provenance">Cumulative engine hours: no hour meter is '
+           'fitted, so this is the baseline plus every run logged since.</p>',
+           '<dl class="kv">']
+    for label, note, value in rows:
+        out.append(f"<div><dt>{_esc(label)}"
+                   f'<span class="sub">{_esc(note)}</span></dt>'
+                   f"<dd>{_esc(value)}</dd></div>")
+    out.append(f'<div class="total"><dt>Total</dt>'
+               f'<dd>{_esc(f"{rec.total_h:,.1f} h")}</dd></div>')
+    out.append("</dl>")
+    if running:
+        # engine_log says this for the same reason: the figure looks stale to
+        # someone watching the engine run unless it says why.
+        out.append('<p class="provenance">'
+                   + _badge("running", kind="flag")
+                   + " A run is in progress — not counted until it is stopped."
+                     "</p>")
+    out.append("</div>")
+    return "".join(out)
+
+
+def render_engine(d, rows, *, tz: tzinfo = timezone.utc) -> str:
+    """Cumulative hours — "how many hours, and how honest is that number?"
+
+    ``rows`` are ``export_engine_cumulative``'s own row dicts, every run across
+    every session, so the page and engine-cumulative.csv cannot disagree. They
+    arrive in ``id`` order and are shown NEWEST FIRST, mirroring the tool
+    (§14.10.2) — by ``id``, not by time, because a ``manual_duration`` run has no
+    start at all and time is therefore not a total order over these rows.
+
+    Deleted runs are shown, struck through and flagged: they are out of the
+    figure but not out of the record (§8). They are excluded from ``counted`` for
+    the same reason they are excluded from the sum.
+    """
+    rec = engine.reconciliation(d)
+    live = [r for r in rows if not r["deleted"]]
+    counted = sum(1 for r in live if not r["open"])
+    running = any(r["open"] for r in live)
+
+    parts = [_reconciliation_html(rec, counted=counted, running=running),
+             f"<h2>Runs &middot; {len(rows)}</h2>"]
+    if rows:
+        parts.append('<ul class="stack">' + "".join(
+            _engine_card(r, tz=tz, show_session=True)
+            for r in reversed(rows)) + "</ul>")
+    else:
+        parts.append(_empty("No engine runs logged."))
+    return page("Engine hours", "".join(parts),
+                subtitle=_vessel_title(d) or None)

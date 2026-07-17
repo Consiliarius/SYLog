@@ -316,6 +316,17 @@ _ENGINE_METHODS = {
 }
 
 
+def engine_method_text(method: str) -> str:
+    """How a run's hours came to be recorded, as a skipper reads it.
+
+    Public because this IS the honesty of the figure (§7): a run counted by the
+    timer and a duration typed in from memory are worth different amounts of
+    trust, and the engine-hours page exists to say so. An unrecognised value
+    renders verbatim — better a raw word than a silent blank on a provenance.
+    """
+    return _ENGINE_METHODS.get(method, method or "")
+
+
 def engine_run_when(row, *, tz: tzinfo = timezone.utc) -> str:
     """When a run happened: '26 Jul 14:02–16:20', or '26 Jul 14:02–' while it is
     still running.
@@ -345,7 +356,7 @@ def engine_run_line(row, *, tz: tzinfo = timezone.utc) -> str:
     """
     parts = [engine_run_when(row, tz=tz)]
     parts.append("running" if row["open"] else format_hm(row["duration_min"] or 0))
-    parts.append(_ENGINE_METHODS.get(row["method"], row["method"]))
+    parts.append(engine_method_text(row["method"]))
     parts.append(f"session {row['session_id']}" if row["session_id"] else "no session")
     if row["notes"]:
         parts.append(row["notes"])

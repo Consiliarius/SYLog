@@ -461,9 +461,13 @@ since §14.10 was parked went into the pure `render` layer as it asked:
   timeline needs it. Now public as `wind_text` / `precip_text`: two copies of
   that rule is one copy waiting to be wrong. `_sail` was left alone; the page
   never needed it, because `sail_plan` arrives pre-resolved (see the table).
+- `render._ENGINE_METHODS`, same again at step 4, now `engine_method_text`. A
+  run counted by the timer and a duration typed in from memory are worth
+  different amounts of trust, and saying so is the whole job of `engine.html`.
 
 The claim was directionally right — the strings were pure, none was trapped in a
-widget — but "no work to do" was not the same thing. Audit it, don't trust it.
+widget — but "no work to do" was not the same thing. **Three of them turned up
+across three pages.** Audit it, don't trust it; a fourth page may find a fourth.
 
 **Decisions §14.10 left open, resolved here:**
 
@@ -507,7 +511,13 @@ widget — but "no work to do" was not the same thing. Audit it, don't trust it.
    dicts. The timeline is stacked cards — §14.10.2's open question, resolved
    there against a real session's data. Takes no `sails` argument: see the note
    on rendered columns below.
-4. `engine.html` — the cumulative reconciliation, then every run.
+4. **BUILT (16 July 2026).** `engine.html` — the cumulative reconciliation, then
+   every run, newest first by `id` (NOT by time: a `manual_duration` run has no
+   start, so time is not a total order over these rows). Mostly assembly: steps 2
+   and 3 had already extracted `engine.reconciliation`, `engine_baseline_note`
+   and the run card. `render._ENGINE_METHODS` was the third private renderer to
+   promote — `engine_method_text` — because 'timer' vs 'entered, duration' IS
+   the honesty §7 is about, and index.html now links here.
 5. Wire into `export.py` beside the CSV writers; a `--no-html` escape hatch if
    generation ever proves slow on the netbook.
 6. Tests: assert escaping (a remark containing `<script>` must not execute),
