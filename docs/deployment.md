@@ -43,6 +43,31 @@ used. It does **not** set the system clock itself.
   (`backup.interval_min`, default 30) while a session is open. It never `cp`s a
   live database and never overwrites an existing backup.
 
+## Moorwatch, the companion tide tool (§17)
+
+The launcher shows a **Moorwatch ↗** button when `tools.moorwatch_dir` points at
+an install; blank (the shipped default) means no button. Set it in **Settings →
+Tools**, or in `config.json`:
+
+```json
+"tools": { "moorwatch_dir": "~/Apps/TSCTide" }
+```
+
+It is run as `python3 -m moorwatch --gui` from that directory — the command is a
+constant in `logbook/companion.py`, not config, because it is a fact about
+Moorwatch's CLI (§17.2). So the directory must be the one `python3 -m moorwatch`
+resolves from, and Moorwatch's own dependencies must be installed for the system
+`python3` this tool already uses.
+
+- **It is started, not embedded.** SYLog spawns it detached and never talks to
+  it. If it fails to start, the launcher's notice line says why.
+- **Diagnosing a failure:** stderr is inherited deliberately, so under `systemd`
+  autostart a crash-on-import is in the journal — `journalctl --user -u <unit>`.
+  A button that appears to do nothing is more likely the window having opened
+  behind SYLog; press it again and it will say "already running".
+- The tool leaves fullscreen on a successful launch so the small window is
+  visible; **F11** puts it back.
+
 ## rclone (optional off-machine copy)
 
 The tool does **not** invoke rclone. A `systemd` timer or a NetworkManager hook

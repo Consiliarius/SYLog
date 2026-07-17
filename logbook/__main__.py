@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> None:
         backup_retention=cfg.backup_retention,
         backup_interval_min=cfg.backup_interval_min,
         html_export=cfg.html_export,
+        moorwatch_dir=cfg.moorwatch_dir,
     )
 
     if args.check:

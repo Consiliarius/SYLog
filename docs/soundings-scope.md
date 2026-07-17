@@ -94,9 +94,19 @@ carried forward from an hour ago is exactly the junk that looks like observation
 **The button says `Depth`, not `Sounding`.** The preset row is at the 800 px
 design floor — 791 px measured, with Checklist included; the longer word costs
 30 px and pushes Checklist off the right edge, where it does not warn, it simply
-is not there. Row 1 has ~95 px spare, not enough to take Checklist either. This
-is the §15.7 situation arriving: the row is full. Another button needs a layout
-re-think, not another squeeze.
+is not there. Row 1 has ~~~95 px~~ **71 px** spare, not enough to take Checklist
+either. This is the §15.7 situation arriving: the row is full. Another button
+needs a layout re-think, not another squeeze.
+
+*Corrected 17 July 2026, building §17:* **row 1 has 71 px spare, not ~95.** The
+791 px above is right and was reproduced exactly by the re-measurement, which is
+what makes the two figures comparable and this one a genuine error rather than a
+different method. It mattered: ~95 px made a labelled `‹ Launcher` button look
+feasible for §17's round trip, and it is not — `‹ Launcher` needs 128 px, and
+nothing labelled fits at all. The conclusion this section draws is unchanged and
+now applies to row 1 as well: **another button here needs a re-think, not a
+squeeze.** §17 took the re-think, putting a `⌂` on the status bar instead. See
+§17.6 for the full measurement table.
 
 ## 16.4 Export — `session-NNN-tide-observations.csv`
 

@@ -206,5 +206,33 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(d.get_meta("engine_hours_baseline"), "1800")  # ...not overwritten
 
 
+class MoorwatchDirTestCase(unittest.TestCase):
+    """`tools.moorwatch_dir` — the companion tide tool's location (§17.3)."""
+
+    def _cfg(self, data):
+        return config.Config(data, Path("config.json"))
+
+    def test_absent_when_the_key_was_never_written(self):
+        # EXAMPLE predates this key entirely, which is the point: a config
+        # written before §17 must still load, and must yield no button.
+        self.assertIsNone(self._cfg(dict(EXAMPLE)).moorwatch_dir)
+
+    def test_absent_when_blank(self):
+        # How config.example.json ships. Blank is the honest default: a boat
+        # without Moorwatch installed gets no button rather than a broken one.
+        self.assertIsNone(self._cfg({"tools": {"moorwatch_dir": ""}}).moorwatch_dir)
+
+    def test_a_configured_directory_is_expanded(self):
+        cfg = self._cfg({"tools": {"moorwatch_dir": "~/Apps/TSCTide"}})
+        self.assertEqual(cfg.moorwatch_dir, Path.home() / "Apps/TSCTide")
+
+    def test_the_shipped_example_ships_the_key_blank(self):
+        # It is optional, so it ships absent-shaped — unlike paths.database,
+        # which ships a real default because the tool cannot start without it.
+        data = json.loads((REPO_ROOT / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["tools"]["moorwatch_dir"], "")
+        self.assertIsNone(self._cfg(data).moorwatch_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

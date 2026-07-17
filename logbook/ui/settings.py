@@ -57,6 +57,16 @@ _SECTIONS = (
         (("backup", "retention"), "Snapshots kept", "int", None),
         (("backup", "interval_min"), "In-session interval (min), 0 = off", "number", None),
     )),
+    # `tools.moorwatch_dir` IS here, though it holds a path, and that is not a
+    # contradiction of the rule above: what is excluded is `paths.*`, the two
+    # locations invariant 11 governs. This one governs nothing — empty means the
+    # launcher has no Moorwatch button (§17.3) — and the netbook is a Debian box
+    # at a chart table, where hand-editing JSON is exactly what §15.5 exists to
+    # avoid. Blank it to remove the button.
+    ("Tools", (
+        (("tools", "moorwatch_dir"), "Moorwatch directory (blank = no button)",
+         "text", None),
+    )),
 )
 
 

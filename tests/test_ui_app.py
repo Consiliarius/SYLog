@@ -15,9 +15,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from logbook import __main__ as entry
-from logbook import db, engine, gps
+from logbook import companion, db, engine, gps
 from logbook.ui import theme
-from logbook.ui.app import App, GpsState
+from logbook.ui.app import App, GpsState, LaunchView, SessionView, write_event
 
 UTC = timezone.utc
 
@@ -336,6 +336,231 @@ class AppShellTestCase(unittest.TestCase):
         self.app.views.current._end()             # ...which is where it is confirmed
         self.assertIsInstance(self.app.views.current, LaunchView)
         self.assertIsNone(self.app.d.open_session())
+
+
+class _FakeProc:
+    """Stands in for Popen. Alive until a returncode is set on it."""
+
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+
+    def poll(self):
+        return self.returncode
+
+
+class MoorwatchTestCase(unittest.TestCase):
+    """The launcher's Moorwatch button (§17). No process is ever started."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.d = db.open_db(Path(self._tmp.name) / "logbook.db")
+        self.addCleanup(self.d.close)
+        self.moorwatch_dir = Path(self._tmp.name) / "TSCTide"
+        self.moorwatch_dir.mkdir()
+        try:
+            self.app = App(self.d, start_reader=False, moorwatch_dir=self.moorwatch_dir)
+        except tk.TclError as exc:              # no display (headless CI)
+            self.skipTest(f"no Tk display: {exc}")
+        self.app.root.withdraw()
+        self.addCleanup(self.app.root.destroy)
+        # The seam. CI has no `python3 -m moorwatch` and must never look for one.
+        self.calls = []
+        self.proc = _FakeProc()
+        self.app.moorwatch.spawn = lambda argv, **kw: (
+            self.calls.append((argv, kw)) or self.proc)
+        self.launch = self.app.views.current
+
+    def test_button_absent_without_a_configured_directory(self):
+        # A boat without Moorwatch installed is a normal boat: the launcher shows
+        # the §14.9 gap it always had, not a control that cannot work.
+        app = App(self.d, start_reader=False)
+        app.root.withdraw()
+        self.addCleanup(app.root.destroy)
+        self.assertIsNone(app.moorwatch)
+        self.assertFalse(hasattr(app.views.current, "_moorwatch_btn"))
+
+    def test_button_takes_the_free_cell_the_grid_was_sized_for(self):
+        info = self.launch._moorwatch_btn.grid_info()
+        self.assertEqual((info["row"], info["column"]), (0, 1))
+        # and the two anchors §14.9 named have not moved under the skipper's thumb
+        self.assertEqual(self.launch._start_btn.grid_info()["column"], 0)
+        self.assertEqual(self.launch._engine_btn.grid_info()["column"], 2)
+
+    def test_the_launcher_grid_still_fits_the_800px_floor(self):
+        # §16.3's constraint. Measured, not assumed — the same method reproduces
+        # the preset row's documented 791 px exactly.
+        self.app.root.update_idletasks()
+        grid = self.launch._moorwatch_btn.master
+        self.assertLessEqual(grid.winfo_reqwidth(), theme.MIN_W)
+
+    def test_press_runs_the_constant_command_in_the_configured_directory(self):
+        self.launch._moorwatch()
+        (argv, kwargs), = self.calls
+        self.assertEqual(argv, list(companion.MOORWATCH_ARGV))
+        self.assertEqual(kwargs["cwd"], str(self.moorwatch_dir))
+        self.assertEqual(self.launch._notice.cget("fg"), theme.FG_MUTED)
+
+    def test_the_first_press_names_the_remedy_before_the_confusion(self):
+        # Moorwatch's window may open behind a fullscreen SYLog, so "started"
+        # alone would imply the skipper is about to see something they are not.
+        self.launch._moorwatch()
+        self.assertIn("alt-tab", self.launch._notice.cget("text"))
+
+    def test_second_press_does_not_start_a_second_copy(self):
+        self.launch._moorwatch()
+        self.launch._moorwatch()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("already running", self.launch._notice.cget("text"))
+        self.assertEqual(self.launch._notice.cget("fg"), theme.FG_MUTED)
+
+    def test_a_dead_copy_is_replaced_on_the_next_press(self):
+        self.launch._moorwatch()
+        self.proc.returncode = 0                     # skipper closed it
+        self.launch._moorwatch()
+        self.assertEqual(len(self.calls), 2)
+
+    def test_a_missing_directory_is_a_notice_not_a_traceback(self):
+        # A traceback out of a Tk callback goes to a console the netbook does not
+        # have: the skipper would press the button and see nothing happen at all.
+        for exc in (FileNotFoundError(2, "No such file or directory: 'python3'"),
+                    NotADirectoryError(20, "Not a directory"),
+                    PermissionError(13, "Permission denied")):
+            with self.subTest(exc=type(exc).__name__):
+                def boom(argv, **kw):
+                    raise exc
+                self.app.moorwatch.spawn = boom
+                self.launch._moorwatch()             # must not raise
+                self.assertEqual(self.launch._notice.cget("fg"), theme.BAD)
+                self.assertIn("did not start", self.launch._notice.cget("text"))
+
+    def test_moorwatch_notice_survives_the_gps_tick(self):
+        # _notice, not _banner: refresh() rewrites _banner on every 250 ms tick.
+        # Mirrors test_launch_engine_warning_survives_the_gps_tick.
+        self.launch._moorwatch()
+        self.app._drain_and_refresh()
+        self.assertIn("alt-tab", self.launch._notice.cget("text"))
+
+    def test_the_button_never_reports_moorwatch_state(self):
+        # §16.1/§17.1 — the line this whole feature is built along. A
+        # running/stopped readout of another tool inside this window is the
+        # instrument §1.2 says the tool is not. No ▶/■, no lamp, no disabling.
+        self.launch._moorwatch()
+        self.assertTrue(self.app.moorwatch.running())
+        self.launch.refresh()
+        self.assertEqual(self.launch._moorwatch_btn.cget("text"), "Moorwatch ↗")
+        self.assertEqual(str(self.launch._moorwatch_btn.cget("state")), "normal")
+
+    def test_launching_leaves_fullscreen_and_says_why(self):
+        # The companion's small window would otherwise open behind a fullscreen
+        # SYLog and read as nothing having happened. Undoing a setting the
+        # skipper chose is only acceptable if it is not done silently.
+        self.app._fullscreen = True
+        self.launch._moorwatch()
+        self.assertFalse(self.app._fullscreen)
+        self.assertIn("F11", self.launch._notice.cget("text"))
+
+    def test_pressing_it_while_already_running_also_leaves_fullscreen(self):
+        # The case that most needs it: a press with Moorwatch already up is the
+        # skipper saying "I cannot see it" — which is exactly what a fullscreen
+        # SYLog is causing. Refusing to move here would answer the complaint by
+        # restating it.
+        self.launch._moorwatch()
+        self.app._fullscreen = True
+        self.launch._moorwatch()
+        self.assertEqual(len(self.calls), 1)              # still no second copy
+        self.assertFalse(self.app._fullscreen)
+        self.assertIn("already running", self.launch._notice.cget("text"))
+        self.assertIn("F11", self.launch._notice.cget("text"))
+
+    def test_a_windowed_launch_leaves_the_window_alone(self):
+        self.assertFalse(self.app._fullscreen)
+        self.launch._moorwatch()
+        self.assertFalse(self.app._fullscreen)
+        self.assertNotIn("F11", self.launch._notice.cget("text"))
+
+    def test_a_failed_launch_does_not_leave_fullscreen(self):
+        # Dropping fullscreen is the price of showing the companion. If it never
+        # started, the skipper paid it for nothing.
+        def boom(argv, **kw):
+            raise FileNotFoundError(2, "nope")
+        self.app.moorwatch.spawn = boom
+        self.app._fullscreen = True
+        self.launch._moorwatch()
+        self.assertTrue(self.app._fullscreen)
+
+
+class LauncherRoundTripTestCase(unittest.TestCase):
+    """Dropping to the launcher mid-session and resuming (§17.4).
+
+    The session survives this not because the trip is careful, but because the
+    session was never in the view: it is in SQLite, and every timer is gated on
+    open_session() — a query, not the view. These tests guard that invariant,
+    which is load-bearing for the whole feature and was previously unguarded.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.d = db.open_db(Path(self._tmp.name) / "logbook.db")
+        self.addCleanup(self.d.close)
+        try:
+            self.app = App(self.d, start_reader=False)
+        except tk.TclError as exc:
+            self.skipTest(f"no Tk display: {exc}")
+        self.app.root.withdraw()
+        self.addCleanup(self.app.root.destroy)
+        self.sid = self.d.create_session(opened_utc="2026-07-13T14:00:00Z")
+        self.app.show_session(self.d.open_session())
+
+    def test_the_launcher_is_reachable_from_a_session_and_resume_returns_to_it(self):
+        self.app.show_launch()
+        launch = self.app.views.current
+        self.assertIsInstance(launch, LaunchView)
+        self.assertIsNotNone(self.d.open_session())          # suspended, not ended
+        self.assertEqual(launch._start_btn.cget("text"), "Resume Session")
+
+        launch._start_session()
+        self.assertIsInstance(self.app.views.current, SessionView)
+        self.assertEqual(self.app.views.current.session["id"], self.sid)
+
+    def test_autolog_keeps_writing_while_the_launcher_shows(self):
+        # The one that matters. If a future refactor gates the timers on the view
+        # instead of the database, a passage silently stops auto-logging while the
+        # skipper looks at the launcher — and nothing else would catch it.
+        self.d.set_autolog_active(self.sid, True)
+        self.app.show_launch()
+        before = len(self.d.session_entries(self.sid))
+        self.app._autolog_tick()
+        self.assertEqual(len(self.d.session_entries(self.sid)), before + 1)
+
+    def test_the_round_trip_keeps_the_armed_autolog_armed(self):
+        self.d.set_autolog_active(self.sid, True)
+        self.app.show_launch()
+        self.app.views.current._start_session()
+        self.assertTrue(self.d.open_session()["autolog_active"])
+
+    def test_the_round_trip_does_not_reset_the_distance_accumulator(self):
+        # `accumulator` lives on App, not SessionView, precisely so a view swap
+        # cannot lose the miles run so far (§5.5).
+        self.app.gps_queue.put(("status", "connected"))
+        self.app.gps_queue.put(("tpv", a_fix(mode=3, lat=50.0, lon=-1.0)))
+        self.app._drain_and_refresh()
+        self.app._distance_tick()
+        accumulator = self.app.accumulator
+        self.assertIsNotNone(accumulator)
+
+        self.app.show_launch()
+        self.app.views.current._start_session()
+        self.assertIs(self.app.accumulator, accumulator)
+
+    def test_entries_logged_before_the_trip_are_still_shown_after_it(self):
+        write_event(self.app, self.d.open_session(),
+                    when=datetime.now(UTC), event_kind="engine_on")
+        self.app.show_launch()
+        self.app.views.current._start_session()
+        shown = self.app.views.current._log.get("1.0", "end")
+        self.assertNotIn("(no entries yet)", shown)
 
 
 if __name__ == "__main__":

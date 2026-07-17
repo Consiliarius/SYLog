@@ -260,3 +260,22 @@ packed **last with `expand=True`**, so it is the widget that gets squeezed — a
 
 Logged here rather than fixed inside this work. If the Pi floor ever becomes
 real, the fix is to shorten the provenance form or give the bar a priority order.
+
+*Re-measured 17 July 2026, building §17, which added a `⌂` to this bar and so
+owed it a real number rather than an estimate:*
+
+| Status bar | Before §17 | With §17's ⌂ | Floor |
+|---|---|---|---|
+| "today" case (note `none`, no warnings) | 690 | **726** | 784 ✓ |
+| worst case (documented + clock warning + failed backup) | **1069** | **1105** | 784 ✗ |
+
+**The ⌂ costs 36 px and does not bite:** the today case keeps 58 px of headroom.
+**But the worst case is 1069, not ~940 — and that is already past the netbook's
+real 1024**, not merely the 784 floor. The estimate above was directionally right
+and optimistically low, and "it does not bite today" was true only of the today
+case. It is still not fixed here, and §17 deliberately did not fix it — but it is
+no longer an estimate, and the trigger is nearer than this section implies: it
+needs a *documented* baseline and one warning showing, not a Pi. The fix is
+unchanged (shorten the provenance form, or give the bar a priority order), and
+`_engine_label` is still the widget that loses — the one carrying the provenance
+§7 says the hours must never appear without.

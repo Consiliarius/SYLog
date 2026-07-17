@@ -69,5 +69,8 @@
   "paths": {
     "database": "~/logbook/logbook.db",
     "backup_dir": "~/OneDrive/logbook/"
+  },
+  "tools": {
+    "moorwatch_dir": ""
   }
 }

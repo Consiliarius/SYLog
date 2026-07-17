@@ -102,6 +102,29 @@ class Config:
     def backup_dir(self) -> Path:
         return Path(self._data["paths"]["backup_dir"]).expanduser()
 
+    # -- companion apps (§17) -------------------------------------------------
+
+    @property
+    def moorwatch_dir(self) -> Path | None:
+        """Where Moorwatch is installed — the directory its module is run from.
+
+        None when absent or empty, and that is what HIDES the launcher button
+        rather than showing one that cannot work: a boat without Moorwatch
+        installed is a normal boat, not a misconfigured one. Same "absent rather
+        than blank" rule as vessel_reference (§15.2).
+
+        Under ``tools`` and not ``paths``: ``paths`` is the two locations the
+        tool cannot start without, and the Settings editor leaves it out to keep
+        invariant 11 (database never inside the backup directory) away from a
+        text box. This key carries neither property, and is editable (§17.3).
+
+        Only the DIRECTORY lives here; the command is a constant in
+        ``companion.py`` (§17.2). Defaults to absent, so a config written before
+        this key existed still loads.
+        """
+        value = self._data.get("tools", {}).get("moorwatch_dir", "")
+        return Path(value).expanduser() if value else None
+
     # -- vessel ---------------------------------------------------------------
 
     @property

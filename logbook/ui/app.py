@@ -23,7 +23,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime, timezone
 
-from logbook import db, engine, gps
+from logbook import companion, db, engine, gps
 from logbook.distance import DistanceAccumulator
 from logbook.ui import render, theme
 
@@ -109,6 +109,7 @@ class App:
         backup_retention: int = 10,
         backup_interval_min: float = 30.0,
         html_export: bool = True,
+        moorwatch_dir=None,
         start_reader: bool = True,
     ) -> None:
         self.d = d
@@ -129,6 +130,14 @@ class App:
         # the pages off. Off costs nothing archival — the CSVs are written either
         # way; only the review view is skipped.
         self.html_export = html_export
+        # The companion tide tool (§17). None when unconfigured, so the launcher
+        # simply has no button — the ⚙-without-a-config rule. The handle lives
+        # HERE and not on LaunchView because ViewManager.show() destroys the view
+        # on every navigation, and "is it already running?" must outlive that:
+        # the same reason `accumulator` lives on App and not on SessionView.
+        self.moorwatch = (
+            companion.Companion("Moorwatch", companion.MOORWATCH_ARGV, moorwatch_dir)
+            if moorwatch_dir else None)
         self._last_backup_changes: int | None = None
         self._backup_status: tuple[str, bool] | None = None  # (text, ok) for the bar
         self.backdate_tolerance_sec = backdate_tolerance_sec
@@ -192,6 +201,24 @@ class App:
         self.root.bind("<Escape>", self._exit_fullscreen)
         self.root.bind("<F2>", self.toggle_theme)
 
+    def _bar_button(self, glyph: str, command) -> tk.Button:
+        """A glyph control on the status bar — the ⚙ and the ⌂.
+
+        Unlabelled by necessity: the bar is one line and its width is spoken for
+        (§15.7). The ⚙ established that a glyph is legible enough here; this is
+        the same button, so it is built by the same code rather than a second
+        copy of the same nine options.
+        """
+        btn = tk.Button(
+            self._bar, text=glyph, command=command,
+            bg=theme.BG_PANEL, fg=theme.FG_MUTED,
+            activebackground=theme.BG_PANEL, activeforeground=theme.FG,
+            bd=0, relief="flat", highlightthickness=0, padx=theme.PAD,
+            pady=0, cursor="hand2", font=self.font_small)
+        btn.pack(side="right", pady=2)   # first packed keeps the corner: the ⚙
+        self._bar_buttons.append(btn)
+        return btn
+
     def _build_chrome(self) -> None:
         self._bar = tk.Frame(self.root, bg=theme.BG_PANEL)
         self._content = tk.Frame(self.root, bg=theme.BG)
@@ -214,14 +241,20 @@ class App:
         # (§10.3), yet the short-handed skipper is never asked to do anything
         # mid-passage. The ⚙ lives here so Settings is reachable from any view
         # (§15.5); it is omitted entirely when there is no config behind it.
+        self._bar_buttons: list[tk.Button] = []
         if self.config is not None:
-            self._settings_btn = tk.Button(
-                self._bar, text="⚙", command=self.show_settings,
-                bg=theme.BG_PANEL, fg=theme.FG_MUTED,
-                activebackground=theme.BG_PANEL, activeforeground=theme.FG,
-                bd=0, relief="flat", highlightthickness=0, padx=theme.PAD,
-                pady=0, cursor="hand2", font=self.font_small)
-            self._settings_btn.pack(side="right", pady=2)
+            self._settings_btn = self._bar_button("⚙", self.show_settings)
+
+        # The launcher, reachable from any view (§17.5) — the ⚙ argument beside
+        # it, exactly (§15.5): a control that must be pressable MID-SESSION cannot
+        # live in the session's own toolbars, which measure 71 px and 9 px spare
+        # at the 800 floor, and §16.3 forbids another squeeze there.
+        #
+        # UNLIKE the ⚙, this does not return to the caller: the launcher IS the
+        # destination, and the way back is the Resume Session button already on
+        # it. The session is not at risk — it lives in SQLite, and every timer is
+        # gated on open_session(), not on the view (§17.4).
+        self._launch_btn = self._bar_button("⌂", self.show_launch)
 
         self._gps_label = tk.Label(self._bar, text="GPS offline", fg=theme.BAD,
                                    bg=theme.BG_PANEL, font=self.font_small)
@@ -263,6 +296,32 @@ class App:
             self._fullscreen = False
             self.root.attributes("-fullscreen", False)
 
+    def start_moorwatch(self) -> tuple[str, bool]:
+        """Start the companion tide tool, returning ``(message, ok)`` for the
+        caller's notice line.
+
+        Returns text rather than writing to a widget: App owns the process handle
+        and the fullscreen state, the view owns where a message goes. Never
+        raises — see companion.Companion.start.
+        """
+        text, ok = self.moorwatch.start()
+        # Moorwatch's window is small and this one may be FULLSCREEN for the
+        # alt-tab-with-OpenCPN workflow (§2.1), so the companion opens behind it
+        # and reads as nothing having happened. Leaving fullscreen is a visible
+        # change to a setting the skipper chose, so the notice says so and how to
+        # put it back; done silently it would just look like a second bug.
+        #
+        # On ANY successful press, not only the one that spawns: a press with it
+        # ALREADY running is the skipper saying "I cannot see it", which is the
+        # case that most needs the window out of the way. A press that FAILED
+        # leaves fullscreen alone — the setting is the price of showing the
+        # companion, and there is nothing to show.
+        if ok and self._fullscreen:
+            self._exit_fullscreen()
+            return (f"{text}  SYLog left fullscreen so it is visible — F11 restores.",
+                    True)
+        return (text, ok)
+
     def toggle_theme(self, event=None) -> str:
         """F2: light (daylight) ⇄ dark (night). Tk widgets read their colours at
         construction, so switching restyles the chrome and REBUILDS the current
@@ -283,6 +342,11 @@ class App:
         for label in (self._gps_label, self._clock_label, self._backup_label,
                       self._where_label, self._engine_label):
             label.configure(bg=theme.BG_PANEL)
+        # The bar's glyph buttons were being left on the old palette by F2 — the
+        # ⚙ has always had this bug; adding the ⌂ beside it would have made two.
+        for btn in self._bar_buttons:
+            btn.configure(bg=theme.BG_PANEL, fg=theme.FG_MUTED,
+                          activebackground=theme.BG_PANEL, activeforeground=theme.FG)
         self._clock_label.configure(fg=theme.BAD)
         self._where_label.configure(fg=theme.FG_MUTED)
         self._engine_label.configure(fg=theme.FG_MUTED)
@@ -949,6 +1013,18 @@ class LaunchView(tk.Frame):
         self._start_btn.grid(row=0, column=0, padx=theme.PAD, pady=theme.PAD)
         self._engine_btn = _big_button(grid, "Engine ▶", self._toggle_engine, width=14)
         self._engine_btn.grid(row=0, column=2, padx=theme.PAD, pady=theme.PAD)
+        # The sixth cell — the one §14.9 sized the 2×3 grid for and never filled,
+        # its five entry points having been one short. Start Session (col 0) and
+        # Engine (col 2) keep their positions, so nothing moves under the thumb;
+        # measured at 594 of the 800 floor with this button in (§17.4).
+        #
+        # Absent, not disabled, when unconfigured — the _vessel_card-returns-None
+        # and ⚙-omitted rule (§15.2). A boat without Moorwatch installed shows the
+        # gap it always had, not a control that cannot work.
+        if self.app.moorwatch is not None:
+            self._moorwatch_btn = _big_button(grid, "Moorwatch ↗", self._moorwatch,
+                                              width=14)
+            self._moorwatch_btn.grid(row=0, column=1, padx=theme.PAD, pady=theme.PAD)
         self._checklists_btn = _big_button(grid, "Checklists", self._checklists, width=14)
         self._checklists_btn.grid(row=1, column=0, padx=theme.PAD, pady=theme.PAD)
         self._tasks_btn = _big_button(grid, "Tasks & Issues", self._tasks, width=14)
@@ -1030,6 +1106,19 @@ class LaunchView(tk.Frame):
         # alone — on _banner they would survive at most one tick (§6.5).
         if result.warnings:
             self._notice.configure(text="; ".join(result.warnings), fg=theme.WARN)
+
+    def _moorwatch(self) -> None:
+        # _notice, not _banner: refresh() rewrites _banner on every 250 ms GPS
+        # tick, so a result posted there survives a quarter-second (§6.5). This is
+        # the first GOOD news to land on _notice; the line was always specified as
+        # "the result of the last button press", only its examples were warnings.
+        #
+        # NOTHING here reads Moorwatch's state back — see companion.py's header.
+        # refresh() deliberately leaves this button alone: no ▶/■, no running
+        # lamp. A readout of another tool inside this window is the instrument
+        # §1.2 says this is not, and §16.1 rejected it by name (§17.1).
+        text, ok = self.app.start_moorwatch()
+        self._notice.configure(text=text, fg=theme.FG_MUTED if ok else theme.BAD)
 
     def _start_session(self) -> None:
         session = self.app.d.open_session()

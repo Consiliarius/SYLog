@@ -50,6 +50,15 @@ imports to calibrate the drying height of a mooring. That file is *interchange,
 not archive*, and breaks two of §8's rules deliberately — read
 [`docs/soundings-scope.md`](docs/soundings-scope.md) before touching it.
 
+The launcher can also **start Moorwatch**, TSCTide's mooring-depth spin-off, as a
+separate process — set `tools.moorwatch_dir` (in Settings, under *Tools*) to
+where it is installed, or leave it blank and the button does not appear. This
+tool starts it and forgets it: it never reads Moorwatch's state back, not even
+whether it is running, because a readout of the tide tool inside this window is
+exactly what §16.1 rejected. Read
+[`docs/companion-apps-scope.md`](docs/companion-apps-scope.md) before extending
+it — the line between *starting* and *listening* is the whole design.
+
 ## Running (once built)
 
 ```
