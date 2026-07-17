@@ -81,6 +81,22 @@ class ConfigSaveTestCase(unittest.TestCase):
         self.cfg.save()
         self.assertEqual(list(self.dir.glob("*.tmp")), [])
 
+    def test_save_raises_when_the_write_does_not_land(self):
+        # save() must confirm the bytes reached disk: a write that silently did
+        # not take is a FAILED save, raised, never a false success. Simulate it by
+        # neutering os.replace so config.json keeps its old contents.
+        import os
+        self.cfg.data["vessel"]["name"] = "Ghost"
+        real_replace = os.replace
+        os.replace = lambda src, dst: os.remove(src)      # the replace vanishes
+        try:
+            with self.assertRaises(config.ConfigError):
+                self.cfg.save()
+        finally:
+            os.replace = real_replace
+        # nothing false was reported: the file still holds the pre-save value
+        self.assertEqual(_read_json(self.path)["vessel"]["name"], "Kingfisher")
+
 
 class SettingsViewTestCase(unittest.TestCase):
     def setUp(self):
@@ -518,6 +534,38 @@ class SettingsViewTestCase(unittest.TestCase):
         section._records[-1].name.insert(0, "Another")
         view._save()
         self.assertIn("share the key", view._banner.cget("text"))
+
+    def test_a_failed_write_reports_the_error_not_a_stale_success(self):
+        # The netbook bug: after one good save, a second save that throws must not
+        # leave the previous "Saved" banner up — that reads as success while
+        # nothing reached disk, and the edit is lost silently on restart. A
+        # non-OSError (here a TypeError) is exactly the class that used to escape.
+        view = self._open()
+        view._save()
+        self.assertIn("Saved.", view._banner.cget("text"))       # first save: green
+
+        def boom():
+            raise TypeError("boom")
+        self.app.config.save = boom
+        self._set(("vessel", "name"), "Kestrel")
+        view._save()                                             # second save: must fail loud
+        banner = view._banner.cget("text")
+        self.assertNotIn("Saved.", banner)                       # not the stale success
+        self.assertIn("could not save", banner.lower())
+
+    def test_an_error_applying_a_section_also_reports_not_success(self):
+        # The failure can be in a section's collect()/apply(), not just the file
+        # write — that path used to be unguarded entirely.
+        view = self._open()
+        view._save()
+
+        def boom(_data):
+            raise RuntimeError("collect blew up")
+        self._checklists().apply = boom
+        view._save()
+        banner = view._banner.cget("text")
+        self.assertNotIn("Saved.", banner)
+        self.assertIn("could not save", banner.lower())
 
     def test_reordering_checklist_items(self):
         self._open()

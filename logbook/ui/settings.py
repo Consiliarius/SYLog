@@ -759,6 +759,10 @@ class SettingsView(tk.Frame):
             self.app.show_launch()
 
     def _save(self) -> None:
+        # Clear any prior banner FIRST: no earlier "Saved" may outlive a failure
+        # below and read as a success that never happened.
+        self._banner.configure(text="")
+
         # Validate everything first — scalars AND sections — because nothing is
         # written until all of it parses: a bad entry anywhere cannot leave the
         # config half-applied (the viewer's rule). Hence sections validate here
@@ -777,14 +781,22 @@ class SettingsView(tk.Frame):
                 self._banner.configure(text=f"{section.heading}: {exc}", fg=theme.BAD)
                 return
 
-        data = self.app.config.data          # mutate in place: unknown keys survive
-        for path, value in values.items():
-            _set(data, path, value)
-        for section in self._custom:
-            section.apply(data)
+        # Apply and write under ONE guard that catches EVERYTHING. A failure in
+        # here — a bug in a section's collect(), or a non-OSError out of save()
+        # like a JSON/encoding error — used to escape this method and leave the
+        # previous banner standing, so a save that wrote nothing looked identical
+        # to one that did: a checklist built after an earlier save was lost,
+        # silently, on restart. save() reads the file back to confirm the write
+        # landed; success is shown only if it did, and every other outcome is
+        # surfaced red, right here. Deliberately broad — a save must fail LOUD.
         try:
+            data = self.app.config.data      # mutate in place: unknown keys survive
+            for path, value in values.items():
+                _set(data, path, value)
+            for section in self._custom:
+                section.apply(data)
             self.app.config.save()
-        except OSError as exc:
+        except Exception as exc:             # noqa: BLE001 — never a silent save
             self._banner.configure(text=f"could not save: {exc}", fg=theme.BAD)
             return
         self._banner.configure(

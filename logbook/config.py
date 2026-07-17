@@ -77,6 +77,13 @@ class Config:
         borrows export.py's discipline — a temp file in the same directory, then
         ``os.replace``. A power cut mid-write must not be able to leave a
         half-written config, because that would stop the tool starting at all.
+
+        **The write is verified before this returns.** The file is read back and
+        compared to what was written; a save that silently did not take — a full
+        disk, a filesystem that lies, an ``os.replace`` that did nothing — RAISES
+        rather than reporting a false success. The Settings editor's "Saved"
+        message rides on that guarantee: it must never appear over a write that
+        did not land (a checklist built after an earlier save, lost on restart).
         """
         path = Path(self.path)
         text = json.dumps(self._data, indent=2, ensure_ascii=False) + "\n"
@@ -90,6 +97,8 @@ class Config:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        if path.read_text(encoding="utf-8") != text:   # the write MUST have landed
+            raise ConfigError(f"{path} did not persist as written")
         return path
 
     # -- paths (``~`` expanded) ----------------------------------------------
