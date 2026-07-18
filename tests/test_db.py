@@ -27,14 +27,15 @@ class DbTestCase(unittest.TestCase):
         self.addCleanup(d.close)
         return d
 
-    def test_fresh_db_creates_schema_v3(self):
+    def test_fresh_db_creates_schema_v4(self):
         d = self.open()
-        self.assertEqual(db.SCHEMA_VERSION, 3)
-        self.assertEqual(d.schema_version(), 3)
+        self.assertEqual(db.SCHEMA_VERSION, 4)
+        self.assertEqual(d.schema_version(), 4)
         names = {r["name"] for r in d.conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertLessEqual(
-            {"meta", "session", "engine_run", "entry", "checklist_run", "task_issue"},
+            {"meta", "session", "engine_run", "entry", "checklist_run", "task_issue",
+             "crew", "session_crew"},
             names)
         # the additive entry columns: checklists/tasks at v2 (§14.3), depth at v3
         entry_cols = {r["name"] for r in d.conn.execute("PRAGMA table_info(entry)")}
@@ -289,11 +290,11 @@ class ChecklistAndTaskIssueTestCase(unittest.TestCase):
 
 
 class MigrationTestCase(unittest.TestCase):
-    """The first real schema migration, v1 -> v2 (§9, §14.8).
+    """The schema migrations, v1 → current (§9, §14.8).
 
-    Additive only: two new tables and two nullable ``entry`` columns. The tests
-    pin the properties that matter — a fresh database and a migrated one end up
-    identical, existing data survives, and a verified backup is taken first.
+    Additive only: each step adds tables or nullable columns. The tests pin the
+    properties that matter — a fresh database and a migrated one end up identical,
+    existing data survives, and a verified backup is taken before each step.
     """
 
     def setUp(self):
@@ -310,6 +311,18 @@ class MigrationTestCase(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def _make_v3_db(self):
+        """Write a database frozen at v3 — the base plus the migrations up to v3,
+        as the build before the crew feature left it. Uses the migration functions
+        themselves, so the fixture is a genuine v3 database, not a hand-built one."""
+        conn = db.connect(self.path)
+        conn.executescript(db._SCHEMA_V1)
+        conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
+        conn.commit()
+        db._migrate_1_to_2(conn)
+        db._migrate_2_to_3(conn)
+        conn.close()
+
     @staticmethod
     def _schema_snapshot(conn):
         tables = sorted(r["name"] for r in conn.execute(
@@ -324,7 +337,7 @@ class MigrationTestCase(unittest.TestCase):
         d = db.open_db(self.path)
         self.addCleanup(d.close)
         self.assertEqual(d.schema_version(), db.SCHEMA_VERSION)
-        self.assertEqual(d.schema_version(), 3)
+        self.assertEqual(d.schema_version(), 4)
 
     def test_migrated_schema_matches_fresh(self):
         # "migrated to vN" and "created at vN" must be the same database (§14.8).
@@ -377,6 +390,197 @@ class MigrationTestCase(unittest.TestCase):
     def test_fresh_create_takes_no_backup(self):
         db.open_db(self.path).close()   # version 0 -> create, not migrate
         self.assertEqual(list(self.dir.glob("*premigrate*")), [])
+
+    # -- v3 -> v4: the crew roster (§4 handoff) --------------------------------
+
+    def test_v3_db_gains_crew_tables_and_bumps_to_4(self):
+        self._make_v3_db()
+        d = db.open_db(self.path)
+        self.addCleanup(d.close)
+        self.assertEqual(d.schema_version(), 4)
+        names = {r["name"] for r in d.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertIn("crew", names)
+        self.assertIn("session_crew", names)
+
+    def test_v3_to_v4_preserves_existing_session_and_free_text_crew(self):
+        # The additive migration never touches the legacy free-text columns —
+        # session.crew becomes Guests going forward, session.skipper a fallback.
+        self._make_v3_db()
+        conn = db.connect(self.path)
+        conn.execute(
+            "INSERT INTO session(opened_utc, skipper, crew) "
+            "VALUES ('2026-07-13T14:00:00Z', 'A. Skipper', 'Mate, Cook')")
+        conn.commit()
+        conn.close()
+
+        d = db.open_db(self.path)
+        self.addCleanup(d.close)
+        self.assertEqual(d.schema_version(), 4)
+        row = d.session(1)
+        self.assertEqual(row["skipper"], "A. Skipper")   # untouched
+        self.assertEqual(row["crew"], "Mate, Cook")      # untouched
+        self.assertEqual(d.session_crew(1), [])          # no roster association yet
+
+    def test_v3_to_v4_writes_verified_backup(self):
+        self._make_v3_db()
+        db.open_db(self.path).close()
+        backups = list(self.dir.glob("logbook-premigrate-v3-to-v4-*.db"))
+        self.assertEqual(len(backups), 1)
+        b = sqlite3.connect(backups[0])
+        try:
+            self.assertEqual(
+                b.execute("SELECT value FROM meta WHERE key = 'schema_version'")
+                .fetchone()[0], "3")
+            self.assertEqual(b.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+        finally:
+            b.close()
+
+
+class CrewTestCase(unittest.TestCase):
+    """The crew roster and the session↔crew association (§4 handoff, v4).
+
+    The properties that matter: a durable identity that resolves live across
+    passages; retire ≠ delete (both preserve history and the name snapshots on it);
+    the skipper is a flagged member counted the same way as any other crew; and
+    ``set_session_crew`` replaces the set atomically, snapshotting names as it goes.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.d = db.open_db(Path(self._tmp.name) / "logbook.db")
+        self.addCleanup(self.d.close)
+
+    def _session(self, **fields):
+        return self.d.create_session(
+            opened_utc="2026-07-13T14:00:00Z", **fields)
+
+    # -- roster CRUD ----------------------------------------------------------
+
+    def test_add_and_list_roster_ordered_by_name(self):
+        self.d.add_crew(name="Bo")
+        self.d.add_crew(name="Al", notes="owner")
+        names = [r["name"] for r in self.d.crew()]
+        self.assertEqual(names, ["Al", "Bo"])              # by name, case-insensitive
+        self.assertEqual(self.d.crew()[0]["notes"], "owner")
+
+    def test_add_requires_a_name(self):
+        with self.assertRaises(ValueError):
+            self.d.add_crew(name="   ")
+
+    def test_rename_and_notes_roundtrip(self):
+        cid = self.d.add_crew(name="Al")
+        self.d.update_crew(cid, name="Alice", notes="skipper's mate")
+        m = self.d.crew_member(cid)
+        self.assertEqual(m["name"], "Alice")
+        self.assertEqual(m["notes"], "skipper's mate")
+
+    def test_update_rejects_unknown_column_and_blank_name(self):
+        cid = self.d.add_crew(name="Al")
+        with self.assertRaises(ValueError):
+            self.d.update_crew(cid, bogus=1)
+        with self.assertRaises(ValueError):
+            self.d.update_crew(cid, name="  ")
+
+    def test_retire_hides_from_picker_but_keeps_in_roster_and_history(self):
+        keep = self.d.add_crew(name="Al")
+        gone = self.d.add_crew(name="Bo")
+        self.d.retire_crew(gone)
+        # active_only is the picker's list; the management list still shows both
+        self.assertEqual([r["id"] for r in self.d.crew(active_only=True)], [keep])
+        self.assertEqual({r["id"] for r in self.d.crew()}, {keep, gone})
+        self.d.activate_crew(gone)
+        self.assertIn(gone, [r["id"] for r in self.d.crew(active_only=True)])
+
+    def test_soft_delete_hides_everywhere_but_member_still_resolves(self):
+        cid = self.d.add_crew(name="Typo")
+        self.d.soft_delete_crew(cid, "added twice")
+        self.assertEqual(self.d.crew(), [])                # gone from the roster
+        self.assertEqual(self.d.crew(active_only=True), [])
+        m = self.d.crew_member(cid)                         # but history resolves it
+        self.assertEqual(m["name"], "Typo")
+        self.assertEqual(m["deleted"], 1)
+        self.assertEqual(m["deleted_reason"], "added twice")
+
+    def test_soft_delete_requires_a_reason(self):
+        cid = self.d.add_crew(name="Al")
+        with self.assertRaises(ValueError):
+            self.d.soft_delete_crew(cid, "  ")
+
+    # -- session association --------------------------------------------------
+
+    def test_set_session_crew_snapshots_names_and_flags_skipper(self):
+        sid = self._session()
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        self.d.set_session_crew(sid, [al, bo], skipper_id=al)
+        rows = self.d.session_crew(sid)
+        self.assertEqual([r["name"] for r in rows], ["Al", "Bo"])   # skipper first
+        self.assertEqual(rows[0]["is_skipper"], 1)
+        self.assertEqual(rows[1]["is_skipper"], 0)
+        self.assertEqual(self.d.session_skipper_id(sid), al)
+        self.assertEqual(self.d.session_skipper_name(sid), "Al")
+        self.assertEqual(self.d.session_crew_names(sid), ["Bo"])    # non-skipper only
+        self.assertEqual(set(self.d.session_crew_ids(sid)), {al, bo})
+
+    def test_skipper_is_folded_into_the_set_even_if_not_listed(self):
+        sid = self._session()
+        al = self.d.add_crew(name="Al")
+        self.d.set_session_crew(sid, [], skipper_id=al)   # skipper only, not in crew
+        self.assertEqual(self.d.session_crew_ids(sid), [al])
+        self.assertEqual(self.d.session_skipper_id(sid), al)
+
+    def test_name_snapshot_survives_a_later_rename(self):
+        sid = self._session()
+        al = self.d.add_crew(name="Al")
+        self.d.set_session_crew(sid, [al], skipper_id=al)
+        self.d.update_crew(al, name="Alice")              # renamed after the passage
+        self.assertEqual(self.d.session_skipper_name(sid), "Al")   # the passage is frozen
+        self.assertEqual(self.d.crew_member(al)["name"], "Alice")  # the roster moved on
+
+    def test_set_session_crew_replaces_not_appends(self):
+        sid = self._session()
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        self.d.set_session_crew(sid, [al, bo], skipper_id=al)
+        self.d.set_session_crew(sid, [bo], skipper_id=bo)   # replace with just Bo
+        self.assertEqual(self.d.session_crew_ids(sid), [bo])
+        self.assertEqual(self.d.session_skipper_id(sid), bo)
+
+    def test_set_session_crew_refuses_an_unknown_id(self):
+        sid = self._session()
+        with self.assertRaises(ValueError):
+            self.d.set_session_crew(sid, [999])
+
+    # -- the per-crew report inputs (§4 handoff, Q3) ---------------------------
+
+    def test_crew_passages_returns_each_session_with_the_skipper_flag(self):
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        s1 = self._session()
+        self.d.set_session_distance(s1, 12.0)             # DOG
+        self.d.update_session(s1, log_start_nm=100.0, log_end_nm=110.5)  # DTW inputs
+        self.d.set_session_crew(s1, [al, bo], skipper_id=al)
+        s2 = self._session()
+        self.d.set_session_crew(s2, [al], skipper_id=al)
+
+        al_passages = self.d.crew_passages(al)
+        self.assertEqual([r["id"] for r in al_passages], [s1, s2])   # oldest first
+        self.assertTrue(all(r["is_skipper"] == 1 for r in al_passages))
+        # Bo was crew on s1 only, and not skipper — mileage is counted regardless.
+        bo_passages = self.d.crew_passages(bo)
+        self.assertEqual([r["id"] for r in bo_passages], [s1])
+        self.assertEqual(bo_passages[0]["is_skipper"], 0)
+        self.assertEqual(bo_passages[0]["distance_og_nm"], 12.0)     # full session row
+        self.assertEqual(bo_passages[0]["log_end_nm"], 110.5)
+
+    def test_crew_passages_resolves_a_retired_or_deleted_member(self):
+        cid = self.d.add_crew(name="Al")
+        sid = self._session()
+        self.d.set_session_crew(sid, [cid], skipper_id=cid)
+        self.d.retire_crew(cid)
+        self.assertEqual([r["id"] for r in self.d.crew_passages(cid)], [sid])
 
 
 if __name__ == "__main__":

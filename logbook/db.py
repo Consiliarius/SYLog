@@ -28,7 +28,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Entry columns writable at insert time (id/edited/deleted are managed elsewhere).
 _ENTRY_COLUMNS = (
@@ -80,6 +80,14 @@ _TASK_ISSUE_REQUIRED = ("kind", "source", "raised_utc", "description")
 _TASK_ISSUE_EDITABLE = ("description", "kind")
 _TASK_ISSUE_KINDS = ("task", "issue")
 _TASK_ISSUE_SOURCES = ("engine", "checklist", "manual")
+
+# Crew roster (§4 handoff, v4). A durable identity referenced live across many
+# passages — which is why it lives in the DB, not the user-editable config the
+# checklist TEMPLATES live in (a completed checklist run snapshots itself; a crew
+# member is resolved again on every passage and in the per-crew report, so the
+# identity must persist independently of config).
+_CREW_COLUMNS = ("name", "notes", "active")
+_CREW_EDITABLE = ("name", "notes", "active")
 
 # The v1 base schema — CREATE statements only; PRAGMAs are per-connection and set
 # in connect(). FROZEN: this is the historical starting point every database is
@@ -302,6 +310,40 @@ CREATE TABLE task_issue (
 """
 
 
+_CREW_TABLE = """
+CREATE TABLE crew (
+    id             INTEGER PRIMARY KEY,
+    name           TEXT NOT NULL,
+    notes          TEXT,
+    active         INTEGER NOT NULL DEFAULT 1,   -- retire = 0: hidden from the
+                                                 -- picker, still resolves in history
+    deleted        INTEGER NOT NULL DEFAULT 0,   -- corrections, not erasures (§5.4)
+    deleted_utc    TEXT,
+    deleted_reason TEXT
+)
+"""
+
+# The session <-> crew many-to-many. ``name`` snapshots the crew member's name at
+# association time, so a past passage reads legibly forever WITHOUT the crew table
+# — the same principle checklist_run.items_json follows (§8). The report still
+# aggregates by the durable ``crew_id``; only display and the archive use the snap.
+#
+# ``is_skipper`` marks which member was in charge. The skipper is not a separate
+# kind of record: they are a crew member of the passage, distinguished by a flag,
+# so their miles are counted by the SAME crew_id aggregation as everyone else's —
+# "handled the same way as everything else". At most one row per session carries
+# it (enforced by the writer, set_session_crew, not a constraint).
+_SESSION_CREW_TABLE = """
+CREATE TABLE session_crew (
+    session_id  INTEGER NOT NULL REFERENCES session(id),
+    crew_id     INTEGER NOT NULL REFERENCES crew(id),
+    name        TEXT NOT NULL,
+    is_skipper  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, crew_id)
+)
+"""
+
+
 def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
     """v1 → v2: Checklists and the Tasks & Issues list (§14).
 
@@ -355,8 +397,30 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    """v3 → v4: a durable crew roster and the session↔crew association (handoff §4).
+
+    Two new tables, nothing altered — existing ``session.crew`` / ``session.skipper``
+    free text is untouched (``session.crew`` is repurposed as the Guests field
+    going forward; both remain legible fallbacks for pre-v4 passages). Additive,
+    like every migration since v1.
+
+    Same shape as its predecessors: one explicit transaction with the version bump
+    inside it, so a half-applied migration cannot report success (§9).
+    """
+    conn.execute("BEGIN")
+    try:
+        conn.execute(_CREW_TABLE)
+        conn.execute(_SESSION_CREW_TABLE)
+        conn.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 # from_version -> the step that carries it to from_version + 1.
-_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
+_MIGRATIONS = {1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4}
 
 
 def _apply_migration_step(conn: sqlite3.Connection, from_version: int) -> int:
@@ -825,6 +889,150 @@ class Database:
 
     def soft_delete_task_issue(self, ti_id, reason: str) -> None:
         self._soft_delete("task_issue", ti_id, reason)
+
+    # -- crew roster and the session association (v4) -------------------------
+
+    def crew(self, *, active_only: bool = False) -> list[sqlite3.Row]:
+        """The roster — non-deleted crew, ordered by name (§5.4: deleted are
+        erased-with-reason and stay hidden). ``active_only`` drops retired members
+        too — that is the picker's list; the crew-management view wants both, so it
+        can un-retire one. A retired member is still resolvable in history."""
+        clauses = ["deleted = 0"]
+        if active_only:
+            clauses.append("active = 1")
+        return self.conn.execute(
+            f"SELECT * FROM crew WHERE {' AND '.join(clauses)} "
+            f"ORDER BY name COLLATE NOCASE, id").fetchall()
+
+    def crew_member(self, crew_id) -> sqlite3.Row | None:
+        """One crew member by id, deleted or not — so history and the per-crew
+        report resolve a name even for a retired or soft-deleted member."""
+        return self.conn.execute(
+            "SELECT * FROM crew WHERE id = ?", (crew_id,)).fetchone()
+
+    def add_crew(self, *, name: str, notes: str | None = None) -> int:
+        """Add a roster member. A name is required — a crew member with no name is
+        nothing, the same rule the task/issue description follows (§6.5)."""
+        if not name or not name.strip():
+            raise ValueError("a crew name is required")
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO crew(name, notes) VALUES (?, ?)",
+                (name.strip(), (notes or None) or None))
+        return cur.lastrowid
+
+    def update_crew(self, crew_id, **fields) -> None:
+        """Correct a roster member's name/notes, or flip ``active`` (§5.4). No
+        ``edited`` marker: crew is a durable reference, not an observation whose
+        provenance a correction could disguise — the name snapshot already frozen
+        on each past ``session_crew`` row is what keeps history stable (§8)."""
+        unknown = set(fields) - set(_CREW_EDITABLE)
+        if unknown:
+            raise ValueError(f"unknown crew columns: {sorted(unknown)}")
+        if "name" in fields and (not fields["name"] or not fields["name"].strip()):
+            raise ValueError("a crew name is required")
+        if not fields:
+            return
+        if "name" in fields:
+            fields["name"] = fields["name"].strip()
+        assignments = ", ".join(f"{col} = ?" for col in fields)
+        with self.conn:
+            self.conn.execute(f"UPDATE crew SET {assignments} WHERE id = ?",
+                              [*fields.values(), crew_id])
+
+    def retire_crew(self, crew_id) -> None:
+        """Retire a member: gone from the picker, still resolved in history and the
+        report. The soft-delete of a roster — a correction for someone who has left
+        the crew, not a mistake to erase."""
+        self.update_crew(crew_id, active=0)
+
+    def activate_crew(self, crew_id) -> None:
+        self.update_crew(crew_id, active=1)
+
+    def soft_delete_crew(self, crew_id, reason: str) -> None:
+        """Withdraw a mis-typed roster entry — corrections, not erasures (§5.4).
+
+        Distinct from retiring: retire is for a real person who has left, delete is
+        for a row that should never have existed. Both preserve the ``session_crew``
+        joins and the name snapshots on them, so past passages stay legible."""
+        self._soft_delete("crew", crew_id, reason)
+
+    def session_crew(self, session_id) -> list[sqlite3.Row]:
+        """A session's crew association rows (crew_id, snapshot name, is_skipper),
+        skipper first then by name. The raw join, from which the ids/names helpers
+        and the export are derived."""
+        return self.conn.execute(
+            "SELECT * FROM session_crew WHERE session_id = ? "
+            "ORDER BY is_skipper DESC, name COLLATE NOCASE", (session_id,)).fetchall()
+
+    def session_crew_ids(self, session_id) -> list[int]:
+        """The crew_ids associated with a session — the multi-select's pre-tick
+        set (includes the skipper, who is one of the crew)."""
+        return [r["crew_id"] for r in self.conn.execute(
+            "SELECT crew_id FROM session_crew WHERE session_id = ?",
+            (session_id,)).fetchall()]
+
+    def session_skipper_id(self, session_id) -> int | None:
+        """The crew_id flagged as skipper for a session, or None."""
+        row = self.conn.execute(
+            "SELECT crew_id FROM session_crew WHERE session_id = ? AND is_skipper = 1",
+            (session_id,)).fetchone()
+        return row["crew_id"] if row else None
+
+    def session_skipper_name(self, session_id) -> str | None:
+        """The snapshot name of the session's roster skipper, or None (a pre-v4
+        session, or one skippered by no roster member — the caller falls back to
+        the legacy free-text ``session.skipper`` then)."""
+        row = self.conn.execute(
+            "SELECT name FROM session_crew WHERE session_id = ? AND is_skipper = 1",
+            (session_id,)).fetchone()
+        return row["name"] if row else None
+
+    def session_crew_names(self, session_id) -> list[str]:
+        """The snapshot names of a session's NON-skipper crew, by name. The skipper
+        is named separately; guests (free-text ``session.crew``) are merged in by
+        the export, not here."""
+        return [r["name"] for r in self.conn.execute(
+            "SELECT name FROM session_crew WHERE session_id = ? AND is_skipper = 0 "
+            "ORDER BY name COLLATE NOCASE", (session_id,)).fetchall()]
+
+    def set_session_crew(self, session_id, crew_ids, *, skipper_id=None) -> None:
+        """Replace a session's crew set in one transaction (delete then insert).
+
+        The skipper is always aboard, so ``skipper_id`` is folded into the set even
+        if it is not in ``crew_ids``. Each row captures the crew member's CURRENT
+        name as a snapshot, so the passage reads legibly forever without the crew
+        table (§8). A crew_id that does not resolve is refused, not silently
+        dropped — a dangling association is exactly the kind of quiet data loss the
+        design forbids."""
+        ids = list(dict.fromkeys(crew_ids))              # dedupe, keep order
+        if skipper_id is not None and skipper_id not in ids:
+            ids.append(skipper_id)
+        with self.conn:
+            self.conn.execute("DELETE FROM session_crew WHERE session_id = ?",
+                              (session_id,))
+            for cid in ids:
+                member = self.conn.execute(
+                    "SELECT name FROM crew WHERE id = ?", (cid,)).fetchone()
+                if member is None:
+                    raise ValueError(f"no crew member with id {cid}")
+                self.conn.execute(
+                    "INSERT INTO session_crew(session_id, crew_id, name, is_skipper) "
+                    "VALUES (?, ?, ?, ?)",
+                    (session_id, cid, member["name"], 1 if cid == skipper_id else 0))
+
+    def crew_passages(self, crew_id) -> list[sqlite3.Row]:
+        """Every session a crew member was aboard, oldest first, each row carrying
+        that member's ``is_skipper`` flag for the passage (§4 handoff, Q3 report).
+
+        Returns full session rows so the caller derives DOG (``distance_og_nm``)
+        and DTW (``render.distance_through_water``) exactly as the passage summaries
+        do — the report must not grow a second, divergent notion of distance. The
+        totals are summed at the display layer, through that one renderer."""
+        return self.conn.execute(
+            "SELECT session.*, session_crew.is_skipper FROM session "
+            "JOIN session_crew ON session_crew.session_id = session.id "
+            "WHERE session_crew.crew_id = ? ORDER BY session.id", (crew_id,)).fetchall()
 
     # -- shared row helpers for the checklist_run / task_issue tables ----------
     #
