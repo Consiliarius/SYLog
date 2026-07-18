@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from logbook import db, engine, passage
@@ -680,6 +681,14 @@ def _plain_entry(app, parent, width=10):
                     highlightbackground=theme.BG_BUTTON, font=app.font_base)
 
 
+def _option_menu(app, parent, var, options):
+    """A styled OptionMenu, matching the place-picker and variation selectors."""
+    om = tk.OptionMenu(parent, var, *options)
+    om.configure(bg=theme.BG_BUTTON, fg=theme.FG, highlightthickness=0,
+                 activebackground=theme.ACCENT, font=app.font_base)
+    return om
+
+
 def _time_entry(app, parent):
     entry = _plain_entry(app, parent, width=6)
     entry.insert(0, datetime.now(timezone.utc).astimezone(app.tz).strftime("%H:%M"))
@@ -981,63 +990,74 @@ def _fill_entry(entry, name):
 
 
 class _CrewSelection:
-    """The roster picker on the session forms: a skipper (single-select) and the
-    crew aboard (multi-select), both drawn from the durable roster (§4 handoff).
+    """The roster picker on the session forms (§4 handoff): a Skipper drop-down and
+    a set of crew slots, each a drop-down onto the roster.
 
-    One row per member — a Skipper radio and an Aboard tick — so the two choices
-    read together and stay compact on the 800 px floor rather than as two separate
-    lists of the same names. The skipper is always aboard: ``set_session_crew``
-    folds them into the set, so an un-ticked Aboard on the skipper is not an error.
+    SLOTS, not one row per roster member — so the widget's size tracks the crew
+    ABOARD (a handful), not the size of the roster, which grows without bound as
+    crew turn over. Two slots by default; '+ Add crew' adds more. Picking '(none)'
+    empties a slot. The skipper is always aboard: ``set_session_crew`` folds them
+    in, so they need not also occupy a crew slot.
 
-    Any already-associated member is shown even if since retired, so editing a
-    session never silently drops a crew member who has since left the roster —
-    which is exactly why retiring keeps the row rather than deleting it.
+    Any already-selected member is offered even if since retired, so editing a
+    passage never drops someone who has left the roster since — the reason retiring
+    keeps the row rather than deleting it. A name shared by two members is
+    disambiguated in the drop-down (by notes, else id), so a label maps to one id.
     """
 
-    _NO_SKIPPER = 0        # the skipper radio's 'nobody' value; 0 is never a real id
+    _NOBODY = "(nobody)"       # the skipper drop-down's 'no skipper' option
+    _NONE = "(none)"           # an empty crew slot
+    _DEFAULT_SLOTS = 2
 
     def __init__(self, app, parent, *, skipper_id=None, crew_ids=()):
         self.app = app
-        self._aboard: dict[int, tk.BooleanVar] = {}
+        self._skipper = None                       # set below iff the roster is non-empty
+        self._crew_vars: list[tk.StringVar] = []
         selected = set(crew_ids) | ({skipper_id} if skipper_id else set())
-        self.members = self._roster(selected)
-        self._skipper = tk.IntVar(value=skipper_id or self._NO_SKIPPER)
+        members = self._roster(selected)
+        self._label_to_id, self._id_to_label = self._labels(members)
+        self._options = [self._id_to_label[m["id"]] for m in members]
 
         box = tk.LabelFrame(parent, text="Crew", bg=theme.BG, fg=theme.FG_MUTED,
                             font=app.font_small, bd=1, labelanchor="nw",
                             padx=theme.PAD, pady=theme.PAD)
         self.widget = box
-        if not self.members:
+        if not members:
             tk.Label(box, text="No crew on the roster yet — add them from the "
                      "launcher's Crew button. (Guests, above, still take free text.)",
-                     bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).grid(
-                row=0, column=0, columnspan=3, sticky="w")
+                     bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(anchor="w")
             return
 
-        tk.Label(box, text="Skipper", bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).grid(row=0, column=0, padx=(0, theme.PAD))
-        tk.Label(box, text="Aboard", bg=theme.BG, fg=theme.FG_MUTED,
-                 font=app.font_small).grid(row=0, column=1, padx=(0, theme.PAD))
-        # An explicit way to clear the skipper — a passage may record who was
-        # aboard without naming who was in charge.
-        tk.Radiobutton(box, text="(nobody)", variable=self._skipper,
-                       value=self._NO_SKIPPER, bg=theme.BG, fg=theme.FG_MUTED,
-                       selectcolor=theme.BG_PANEL, activebackground=theme.BG,
-                       activeforeground=theme.FG, font=app.font_small,
-                       highlightthickness=0).grid(row=1, column=0, columnspan=3, sticky="w")
-        for i, member in enumerate(self.members, start=2):
-            tk.Radiobutton(box, variable=self._skipper, value=member["id"],
-                           bg=theme.BG, activebackground=theme.BG,
-                           selectcolor=theme.BG_PANEL, highlightthickness=0).grid(
-                row=i, column=0)
-            aboard = tk.BooleanVar(value=member["id"] in crew_ids)
-            self._aboard[member["id"]] = aboard
-            tk.Checkbutton(box, variable=aboard, bg=theme.BG, activebackground=theme.BG,
-                           selectcolor=theme.BG_PANEL, highlightthickness=0).grid(
-                row=i, column=1)
-            label = member["name"] + ("   (retired)" if not member["active"] else "")
-            tk.Label(box, text=label, bg=theme.BG, fg=theme.FG,
-                     font=app.font_base, anchor="w").grid(row=i, column=2, sticky="w")
+        skipper_row = tk.Frame(box, bg=theme.BG)
+        skipper_row.pack(fill="x", anchor="w")
+        tk.Label(skipper_row, text="Skipper", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small, width=8, anchor="e").pack(side="left", padx=(0, theme.PAD))
+        self._skipper = tk.StringVar(value=self._id_to_label.get(skipper_id, self._NOBODY))
+        _option_menu(app, skipper_row, self._skipper,
+                     [self._NOBODY, *self._options]).pack(side="left")
+
+        tk.Label(box, text="Crew aboard", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).pack(anchor="w", pady=(theme.PAD, 0))
+        self._slots = tk.Frame(box, bg=theme.BG)
+        self._slots.pack(fill="x", anchor="w")
+
+        # One slot per pre-filled crew member (the skipper is not a crew slot),
+        # padded to the default so a fresh passage opens with two empty slots.
+        crew_only = [c for c in crew_ids if c != skipper_id]
+        while len(crew_only) < self._DEFAULT_SLOTS:
+            crew_only.append(None)
+        for cid in crew_only:
+            self._add_slot(cid)
+
+        _big_button(box, "+ Add crew", self._add_slot).pack(anchor="w", pady=(theme.PAD, 0))
+
+    def _add_slot(self, crew_id=None):
+        """Append one crew slot, pre-selected to ``crew_id`` or empty. Also the
+        '+ Add crew' button's command (called with no argument)."""
+        var = tk.StringVar(value=self._id_to_label.get(crew_id, self._NONE))
+        self._crew_vars.append(var)
+        _option_menu(self.app, self._slots, var,
+                     [self._NONE, *self._options]).pack(anchor="w", pady=1)
 
     def _roster(self, selected):
         """Active crew, plus any already-selected member even if since retired, by
@@ -1052,12 +1072,37 @@ class _CrewSelection:
                     members.append(extra)
         return sorted(members, key=lambda m: m["name"].lower())
 
+    @staticmethod
+    def _labels(members):
+        """Two-way maps between a drop-down label and a crew_id. A name shared by
+        two members is disambiguated (notes, else id) so every label is unique and
+        resolves to one id; a retired member is marked in the label."""
+        counts = Counter(m["name"] for m in members)
+        label_to_id, id_to_label = {}, {}
+        for m in members:
+            label = m["name"]
+            if counts[m["name"]] > 1:
+                label = f"{label} ({m['notes'] or '#' + str(m['id'])})"
+            if not m["active"]:
+                label = f"{label} — retired"
+            label_to_id[label] = m["id"]
+            id_to_label[m["id"]] = label
+        return label_to_id, id_to_label
+
     def skipper_id(self):
-        value = self._skipper.get()
-        return value if value != self._NO_SKIPPER else None
+        if self._skipper is None:
+            return None
+        return self._label_to_id.get(self._skipper.get())
 
     def crew_ids(self):
-        return [cid for cid, var in self._aboard.items() if var.get()]
+        """The distinct crew members picked across the slots (the skipper is added
+        separately by ``set_session_crew``). Empty slots and duplicates drop out."""
+        ids = []
+        for var in self._crew_vars:
+            cid = self._label_to_id.get(var.get())
+            if cid is not None and cid not in ids:
+                ids.append(cid)
+        return ids
 
 
 def _build_session_fields(app, parent, values, *, skipper_id=None, crew_ids=()):
