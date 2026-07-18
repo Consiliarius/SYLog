@@ -157,6 +157,38 @@ class ExportTestCase(unittest.TestCase):
         self.assertEqual(row["skipper"], "Al")         # roster snapshot, not "A. Skipper"
         self.assertEqual(row["crew"], "Bo, Deckhand Sam")   # non-skipper roster + guest
 
+    def test_export_all_regenerates_a_page_and_csv_per_session(self):
+        # The bulk rebuild used after an import, whose sessions never went through
+        # the app's close-and-export (so their pages/CSVs don't exist yet).
+        self._entry()
+        sid2 = self.d.create_session(opened_utc="2026-07-20T09:00:00Z",
+                                     bound_for="Cowes")
+        self.d.close_session(sid2, closed_utc="2026-07-20T12:00:00Z")
+        names = {p.name for p in export.export_all(self.d, self.out, sails=SAILS, tz=UTC)}
+        for tag in ("session-001", "session-002"):
+            self.assertIn(f"{tag}.html", names)          # a page per session
+            self.assertIn(f"{tag}-summary.csv", names)   # and its archival summary
+        self.assertIn("index.html", names)
+
+    def test_export_all_leaves_no_dangling_dashboard_links(self):
+        # After a full rebuild every session the index lists has a page beside it.
+        import re
+        self.d.create_session(opened_utc="2026-07-20T09:00:00Z")
+        export.export_all(self.d, self.out, sails=SAILS, tz=UTC)
+        index = (self.out / "index.html").read_text(encoding="utf-8")
+        for href in re.findall(r'href="([^"]*)"', index):
+            self.assertTrue((self.out / href).exists(),
+                            f"index links to {href}, which was not written")
+
+    def test_export_all_empty_db_still_writes_the_cross_cutting_record(self):
+        from pathlib import Path
+        empty = db.open_db(Path(self.dir) / "empty.db")
+        self.addCleanup(empty.close)
+        names = {p.name for p in export.export_all(empty, self.out / "e",
+                                                   sails=SAILS, tz=UTC)}
+        self.assertIn("index.html", names)
+        self.assertIn("engine-cumulative.csv", names)
+
     def test_summary_carries_the_derived_time_split(self):
         # §5.6 under way / stationary written into the archival record, not left
         # to be reconstructed from the event pairs.
