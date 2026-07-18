@@ -76,10 +76,10 @@ def _session_label(session) -> str:
     # from GPS, DTW derived from the impeller readings (render, single-source).
     figures = []
     if session["distance_og_nm"]:
-        figures.append(f"{session['distance_og_nm']:.1f} nm DOG")
+        figures.append(f"{render.format_nm(session['distance_og_nm'])} nm DOG")
     dtw = render.distance_through_water(session)
     if dtw is not None:
-        figures.append(f"{dtw:.1f} nm DTW")
+        figures.append(f"{render.format_nm(dtw)} nm DTW")
     distance = "  ".join(figures)
     return f"#{session['id']:>3}  {opened}  {route or '—'}  [{status}]  {distance}"
 

@@ -92,6 +92,15 @@ def distance_through_water(row) -> float | None:
     return end - start
 
 
+def format_nm(value) -> str:
+    """A distance in nautical miles to a tenth: 13.902 -> '13.9'.
+
+    DISPLAY only — the CSV keeps full precision (§8). One place, so the log viewer
+    and every review page round DOG and DTW identically, and never disagree (§6.8,
+    §14.10.1). Always one decimal, so a whole number still reads '12.0'."""
+    return f"{value:.1f}"
+
+
 def format_position(lat: float, lon: float) -> str:
     """Degrees-and-minutes for display (the stored value is decimal degrees)."""
     return f"{_dm(lat, 'NS', 2)} {_dm(lon, 'EW', 3)}"

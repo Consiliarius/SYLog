@@ -70,6 +70,14 @@ class RenderTestCase(unittest.TestCase):
         self.assertIsNone(
             render.distance_through_water({"log_start_nm": 40.0, "log_end_nm": 12.0}))
 
+    def test_format_nm_rounds_to_a_tenth(self):
+        # Display precision for DOG/DTW — one decimal, always (§6.8). The CSV keeps
+        # full precision; only the shown figure rounds.
+        self.assertEqual(render.format_nm(13.90203221356903), "13.9")
+        self.assertEqual(render.format_nm(84.9155), "84.9")
+        self.assertEqual(render.format_nm(12.0), "12.0")   # a whole number still 1dp
+        self.assertEqual(render.format_nm(1.55), "1.6")    # rounds, not truncates
+
     def test_position_format(self):
         self.assertEqual(render.format_position(50.8533, 0.575), "50°51.2'N 000°34.5'E")
         south_west = render.format_position(-10.5, -20.25)
