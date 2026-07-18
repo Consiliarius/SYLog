@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 
 from logbook import db, engine, passage
 from logbook.ui import render, theme
-from logbook.ui.app import _big_button, passage_next_kind, write_event
+from logbook.ui.app import _big_button, _ScrollBody, passage_next_kind, write_event
 
 _PRECIP_TYPES = ("", "none", "rain", "drizzle", "hail", "sleet", "snow")
 _INTENSITIES = ("", "light", "moderate", "heavy")
@@ -1178,11 +1178,9 @@ class SessionStartView(tk.Frame):
                      bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(
                 anchor="w", padx=theme.PAD)
 
-        body = tk.Frame(self, bg=theme.BG)
-        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
-        self.entries, self.crew_sel = _build_session_fields(
-            app, body, values, skipper_id=skipper_id, crew_ids=crew_ids)
-
+        # Footer pinned FIRST so Start/Skip stay reachable; the fields scroll above
+        # it. The roster picker can make the form taller than the 800×480 floor
+        # (§2.1) — the same reason the checklist form and Settings editor scroll.
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", app.show_launch).pack(
@@ -1190,6 +1188,11 @@ class SessionStartView(tk.Frame):
         _big_button(footer, "Start session", self._start).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Skip", self._skip).pack(side="right", padx=2, pady=theme.PAD)
+
+        body = _ScrollBody(self)
+        body.pack(fill="both", expand=True, padx=theme.PAD * 2, pady=theme.PAD)
+        self.entries, self.crew_sel = _build_session_fields(
+            app, body.inner, values, skipper_id=skipper_id, crew_ids=crew_ids)
 
     def _open(self, *, skipper_id=None, crew_ids=(), **fields):
         d = self.app.d
@@ -1224,21 +1227,23 @@ class SessionEditView(tk.Frame):
 
         tk.Label(self, text="Session details", bg=theme.BG, fg=theme.FG,
                  font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
-        body = tk.Frame(self, bg=theme.BG)
-        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
-        # Pre-fill from THIS session's own association (all associated ids, incl the
-        # skipper and any since-retired member — nothing silently dropped on save).
-        self.entries, self.crew_sel = _build_session_fields(
-            app, body, {col: session[col] for col in _ALL_SESSION_COLUMNS},
-            skipper_id=app.d.session_skipper_id(session["id"]),
-            crew_ids=app.d.session_crew_ids(session["id"]))
-
+        # Footer pinned first so Save stays reachable; the fields scroll above it,
+        # as the roster picker can outgrow the 800×480 floor (§2.1).
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._cancel).pack(
             side="left", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Save", self._save).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
+
+        body = _ScrollBody(self)
+        body.pack(fill="both", expand=True, padx=theme.PAD * 2, pady=theme.PAD)
+        # Pre-fill from THIS session's own association (all associated ids, incl the
+        # skipper and any since-retired member — nothing silently dropped on save).
+        self.entries, self.crew_sel = _build_session_fields(
+            app, body.inner, {col: session[col] for col in _ALL_SESSION_COLUMNS},
+            skipper_id=app.d.session_skipper_id(session["id"]),
+            crew_ids=app.d.session_crew_ids(session["id"]))
 
     def _cancel(self):
         self.app.show_session(self.session)
