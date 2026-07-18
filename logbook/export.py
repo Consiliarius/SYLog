@@ -408,6 +408,36 @@ def _crew_display(d, session) -> tuple[str, str]:
     return skipper, ", ".join(names)
 
 
+def export_all(d, out_dir, *, sails=None, tz: tzinfo = timezone.utc,
+               html: bool = True) -> list[Path]:
+    """Regenerate the archival files (and review pages) for EVERY session, plus the
+    cross-cutting CSVs/pages — a bulk rebuild.
+
+    The app writes these as each session CLOSES (§6.2, §14.10). This rebuilds them
+    all at once: after a bulk import whose sessions never went through the app's
+    close (see gpx_import), or after a change to the exporters/renderers.
+    Deterministic, stable filenames (§8), so it overwrites rather than accumulates.
+    Returns the paths written.
+
+    HTML is regenerated per session, exactly as ``export_session`` does for the
+    CSVs — each call also refreshes the cross-cutting pages, so the dashboard and
+    the per-crew pages end up consistent with every session present.
+    """
+    out_dir = Path(out_dir)
+    written: list[Path] = []
+    sessions = d.sessions()
+    for session in sessions:
+        written += export_session(d, session["id"], out_dir, sails=sails, tz=tz)
+    if not sessions:
+        # An empty database still gets its cross-cutting record and dashboard.
+        written.append(export_engine_cumulative(d, out_dir))
+        written.append(export_tasks_and_issues(d, out_dir, tz=tz))
+    if html:
+        for session_id in ([s["id"] for s in sessions] or [None]):
+            written += export_html(d, session_id, out_dir, sails=sails, tz=tz)
+    return written
+
+
 def _summary_row(d, session) -> dict:
     """Session metadata, the derived time split (§5.6), and the vessel's identity.
 
