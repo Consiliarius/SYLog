@@ -689,6 +689,23 @@ def _option_menu(app, parent, var, options):
     return om
 
 
+def _slim_button(app, parent, text, command):
+    """A compact, low-chrome button for a minor inline action (e.g. '+ Add crew').
+
+    Lighter than ``_big_button`` — the small font, tight padding and no border —
+    so a secondary control inside a form box does not read as a main action. Keeps
+    the same flat hover so it is still clearly a button."""
+    base = theme.BG_BUTTON
+    hover = theme.mix(base, theme.FG, 0.16)
+    btn = tk.Button(parent, text=text, command=command, bg=base, fg=theme.FG,
+                    activebackground=hover, activeforeground=theme.FG,
+                    bd=0, relief="flat", highlightthickness=0, cursor="hand2",
+                    font=app.font_small, padx=theme.PAD, pady=3)
+    btn.bind("<Enter>", lambda _e: btn.configure(bg=hover))
+    btn.bind("<Leave>", lambda _e: btn.configure(bg=base))
+    return btn
+
+
 def _time_entry(app, parent):
     entry = _plain_entry(app, parent, width=6)
     entry.insert(0, datetime.now(timezone.utc).astimezone(app.tz).strftime("%H:%M"))
@@ -1049,7 +1066,8 @@ class _CrewSelection:
         for cid in crew_only:
             self._add_slot(cid)
 
-        _big_button(box, "+ Add crew", self._add_slot).pack(anchor="w", pady=(theme.PAD, 0))
+        _slim_button(app, box, "+ Add crew", self._add_slot).pack(
+            anchor="w", pady=(theme.PAD, 0))
 
     def _add_slot(self, crew_id=None):
         """Append one crew slot, pre-selected to ``crew_id`` or empty. Also the
