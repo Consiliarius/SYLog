@@ -33,7 +33,8 @@ from string import Template
 from logbook import db, engine
 from logbook.ui.render import (  # pure; imports no Tk, as export.py's do
     distance_through_water, engine_baseline_note, engine_method_text,
-    engine_run_when, format_hm, precip_text, split_label, vessel_bar, wind_text,
+    engine_run_when, format_hm, format_nm, precip_text, split_label, vessel_bar,
+    wind_text,
 )
 
 # One shared stylesheet, inlined into every page. Light only: a single theme is
@@ -462,7 +463,7 @@ def _session_card(row, *, tz: tzinfo) -> str:
 
     facts = []
     if row["distance_og_nm"] is not None:
-        facts.append(f"{row['distance_og_nm']:g} nm")
+        facts.append(f"{format_nm(row['distance_og_nm'])} nm")
     if not row["closed"]:
         facts.append("still open")
     # Each fact escaped, THEN joined with the entity — joining first would send
@@ -811,7 +812,7 @@ def render_session(summary, entries, engine_runs, checklist_runs, *,
         figures.append(("DTW", dtw))
     if figures:
         cells = "".join(
-            f'<div class="dfig"><span class="figure">{value:g} nm</span>'
+            f'<div class="dfig"><span class="figure">{format_nm(value)} nm</span>'
             f'<span class="fig-label">{label}</span></div>' for label, value in figures)
         lead.append(f'<div class="figures">{cells}</div>')
     lead.append('<dl class="kv">')
@@ -951,9 +952,9 @@ def _crew_index_card(c) -> str:
     n = totals["passages"]
     facts = [f"{n} passage" if n == 1 else f"{n} passages"]
     if totals["dog"] is not None:
-        facts.append(f"{totals['dog']:g} nm DOG")
+        facts.append(f"{format_nm(totals['dog'])} nm DOG")
     if totals["dtw"] is not None:
-        facts.append(f"{totals['dtw']:g} nm DTW")
+        facts.append(f"{format_nm(totals['dtw'])} nm DTW")
     trail = " &middot; ".join(_esc(f) for f in facts)
 
     marks = [_badge("crew", kind="quiet")]
@@ -977,10 +978,10 @@ def _crew_passage_card(row, *, tz: tzinfo) -> str:
 
     facts = []
     if row["distance_og_nm"] is not None:
-        facts.append(f"DOG {row['distance_og_nm']:g} nm")
+        facts.append(f"DOG {format_nm(row['distance_og_nm'])} nm")
     dtw = distance_through_water(row)
     if dtw is not None:
-        facts.append(f"DTW {dtw:g} nm")
+        facts.append(f"DTW {format_nm(dtw)} nm")
     trail = " &middot; ".join(_esc(f) for f in facts)
 
     marks = [_badge(f"Session {number:03d}", kind="quiet")]
@@ -1020,7 +1021,7 @@ def render_crew(member, *, tz: tzinfo = timezone.utc, vessel: str = "") -> str:
         figures.append(("DTW total", totals["dtw"]))
     if figures:
         cells = "".join(
-            f'<div class="dfig"><span class="figure">{value:g} nm</span>'
+            f'<div class="dfig"><span class="figure">{format_nm(value)} nm</span>'
             f'<span class="fig-label">{label}</span></div>' for label, value in figures)
         lead.append(f'<div class="figures">{cells}</div>')
     lead.append('<dl class="kv">')

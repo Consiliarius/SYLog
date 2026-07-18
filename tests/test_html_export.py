@@ -231,6 +231,23 @@ class HtmlExportTestCase(unittest.TestCase):
         self.assertIn("18.4 nm", page)          # DOG present
         self.assertNotIn("DTW", page)           # no through-water figure
 
+    def test_distances_are_rounded_to_a_tenth_on_the_page(self):
+        """DOG/DTW show to a tenth of a mile; the CSV keeps full precision (§8)."""
+        self.d.set_session_distance(self.sid, 13.90203221356903)   # raw GPS total
+        self.d.update_session(self.sid, log_start_nm=0.0)
+        self.d.close_session(self.sid, closed_utc="2026-07-13T14:00:00Z",
+                             log_end_nm=17.63)
+        page = self._session_page()
+        self.assertIn("13.9 nm", page)                 # DOG, rounded
+        self.assertNotIn("13.902", page)               # not the raw figure
+        self.assertIn("17.6 nm", page)                 # DTW, rounded
+
+        export.export_session(self.d, self.sid, self.out, sails=SAILS, tz=UTC)
+        with open(self.out / "session-001-summary.csv", encoding="utf-8",
+                  newline="") as fh:
+            summary = next(csv.DictReader(fh))
+        self.assertEqual(summary["distance_og_nm"], "13.90203221356903")  # CSV: full
+
     def test_every_populated_entry_column_reaches_the_page(self):
         """The test §16's soundings needed and did not have.
 
