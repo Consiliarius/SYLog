@@ -925,11 +925,13 @@ def crew_page_name(member_id) -> str:
 
 
 def _crew_totals(passages) -> dict:
-    """A crew member's mileage over their passages — total DOG and DTW, the count,
-    and how many they skippered (§4 handoff, Q3).
+    """A crew member's running totals over their passages — hours under way, DOG
+    and DTW, the count, and how many they skippered (§4 handoff, Q3).
 
-    DTW goes through ``render.distance_through_water``, the one renderer the
-    session page and CSV also use, so the total cannot diverge from its parts. A
+    Hours are TIME UNDER WAY (§5.6), summed from each passage's own split, so it is
+    voyaging time (the mile-building figure), not elapsed-with-anchor-stops. DTW
+    goes through ``render.distance_through_water``, the one renderer the session
+    page and CSV also use, so the total cannot diverge from its parts. A mileage
     total is ``None`` — shown as '—', never 0 — when NO passage recorded that
     figure: zero miles and no reading are different facts (§10.1)."""
     dog_vals = [p["distance_og_nm"] for p in passages
@@ -939,6 +941,7 @@ def _crew_totals(passages) -> dict:
     return {
         "passages": len(passages),
         "skippered": sum(1 for p in passages if p["is_skipper"]),
+        "under_way_min": sum(p["time_under_way_min"] or 0 for p in passages),
         "dog": sum(dog_vals) if dog_vals else None,
         "dtw": sum(dtw_vals) if dtw_vals else None,
     }
@@ -950,6 +953,8 @@ def _crew_index_card(c) -> str:
     totals = _crew_totals(c["passages"])
     n = totals["passages"]
     facts = [f"{n} passage" if n == 1 else f"{n} passages"]
+    if totals["under_way_min"]:
+        facts.append(f"{format_hm(totals['under_way_min'])} under way")
     if totals["dog"] is not None:
         facts.append(f"{totals['dog']:g} nm DOG")
     if totals["dtw"] is not None:
@@ -976,6 +981,8 @@ def _crew_passage_card(row, *, tz: tzinfo) -> str:
     passage = " to ".join(x for x in (row["departed_from"], row["bound_for"]) if x)
 
     facts = []
+    if row["time_under_way_min"]:
+        facts.append(format_hm(row["time_under_way_min"]))
     if row["distance_og_nm"] is not None:
         facts.append(f"DOG {row['distance_og_nm']:g} nm")
     dtw = distance_through_water(row)
@@ -998,12 +1005,13 @@ def _crew_passage_card(row, *, tz: tzinfo) -> str:
 
 
 def render_crew(member, *, tz: tzinfo = timezone.utc, vessel: str = "") -> str:
-    """One crew member's page — "how far has this person sailed with the boat?"
+    """One crew member's page — "how far, and how long, has this person sailed?"
 
-    The totals lead (DOG and DTW, each labelled so neither is read as the other,
-    §6.8), then every passage they were aboard, linking to the session page. Both
-    figures reported, deliberately: their difference over time is the tidal set,
-    and the skipper wants to see which reference tracks better (§4 handoff, Q3).
+    The totals lead — hours under way (§5.6), plus DOG and DTW each labelled so
+    neither is read as the other (§6.8) — then every passage they were aboard,
+    linking to the session page. Both mileage figures reported, deliberately: their
+    difference over time is the tidal set, and the skipper wants to see which
+    reference tracks better (§4 handoff, Q3).
 
     ``member`` is ``{id, name, active, passages}``; each passage is an
     ``export._summary_row`` dict + ``is_skipper``, so this page cannot disagree
@@ -1025,6 +1033,7 @@ def render_crew(member, *, tz: tzinfo = timezone.utc, vessel: str = "") -> str:
         lead.append(f'<div class="figures">{cells}</div>')
     lead.append('<dl class="kv">')
     facts = [("Passages", _esc(totals["passages"])),
+             ("Under way", _esc(format_hm(totals["under_way_min"]))),
              ("As skipper", _esc(totals["skippered"]))]
     if not member["active"]:
         facts.append(("Status", _badge("retired", kind="quiet")))

@@ -452,6 +452,16 @@ class CrewHtmlTestCase(unittest.TestCase):
     def _passage(self, *, departed, bound, dog, log_start, log_end):
         sid = self.d.create_session(opened_utc="2026-07-13T09:00:00Z",
                                     departed_from=departed, bound_for=bound)
+        # A departure and arrival five hours apart, so the passage has real time
+        # under way (§5.6) for the per-crew hours total.
+        ev = dict(session_id=sid, time_source="system", entry_type="event",
+                  category="event", position_source="none")
+        self.d.insert_entry(**ev, event_kind="departure",
+                            timestamp_utc="2026-07-13T09:00:00Z",
+                            recorded_utc="2026-07-13T09:00:00Z")
+        self.d.insert_entry(**ev, event_kind="arrival",
+                            timestamp_utc="2026-07-13T14:00:00Z",
+                            recorded_utc="2026-07-13T14:00:00Z")
         self.d.set_session_distance(sid, dog)
         self.d.update_session(sid, log_start_nm=log_start)
         self.d.close_session(sid, closed_utc="2026-07-13T14:00:00Z", log_end_nm=log_end)
@@ -480,6 +490,8 @@ class CrewHtmlTestCase(unittest.TestCase):
         self.assertIn("Yarmouth to Poole", text)
         self.assertIn("30.4 nm", text)     # DOG total: 18.4 + 12.0
         self.assertIn("28.8 nm", text)     # DTW total: 17.6 + 11.2
+        self.assertIn("Under way", text)   # the hours total row
+        self.assertIn("10h 00m", text)     # 2 passages x 5h under way
         self.assertIn("skipper", pages[html_export.crew_page_name(al)].lower())
 
         # Bo was crew on the first passage only, and not skipper.
