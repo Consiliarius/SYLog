@@ -431,5 +431,103 @@ class HtmlExportTestCase(unittest.TestCase):
         self.assertIn("No entries logged", page)
 
 
+class CrewHtmlTestCase(unittest.TestCase):
+    """The per-crew page and its index links (§4 handoff, Q3).
+
+    Same three rules as the rest of the export: escaping (a crew name is free
+    text), self-containment and navigation depth (covered by the shared page
+    tests, re-checked here now that crew pages exist), and parity — the per-crew
+    figures are the session pages' DOG/DTW, summed through the one renderer.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.out = self.dir / "out"
+        self.d = db.open_db(self.dir / "logbook.db")
+        self.addCleanup(self.d.close)
+        self.d.set_meta("vessel_name", "Kingfisher")
+
+    def _passage(self, *, departed, bound, dog, log_start, log_end):
+        sid = self.d.create_session(opened_utc="2026-07-13T09:00:00Z",
+                                    departed_from=departed, bound_for=bound)
+        self.d.set_session_distance(sid, dog)
+        self.d.update_session(sid, log_start_nm=log_start)
+        self.d.close_session(sid, closed_utc="2026-07-13T14:00:00Z", log_end_nm=log_end)
+        return sid
+
+    def _pages(self) -> dict[str, str]:
+        latest = self.d.last_session()["id"]
+        export.export_html(self.d, latest, self.out, tz=UTC)
+        return {p.name: p.read_text(encoding="utf-8")
+                for p in self.out.glob("*.html")}
+
+    def test_per_crew_page_lists_passages_with_dog_dtw_and_totals(self):
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        s1 = self._passage(departed="Haslar", bound="Yarmouth", dog=18.4,
+                           log_start=0.0, log_end=17.6)
+        self.d.set_session_crew(s1, [al, bo], skipper_id=al)
+        s2 = self._passage(departed="Yarmouth", bound="Poole", dog=12.0,
+                           log_start=0.0, log_end=11.2)
+        self.d.set_session_crew(s2, [al], skipper_id=al)
+
+        pages = self._pages()
+        text = strip_tags(pages[html_export.crew_page_name(al)])
+        self.assertIn("Al", text)
+        self.assertIn("Haslar to Yarmouth", text)
+        self.assertIn("Yarmouth to Poole", text)
+        self.assertIn("30.4 nm", text)     # DOG total: 18.4 + 12.0
+        self.assertIn("28.8 nm", text)     # DTW total: 17.6 + 11.2
+        self.assertIn("skipper", pages[html_export.crew_page_name(al)].lower())
+
+        # Bo was crew on the first passage only, and not skipper.
+        bo_text = strip_tags(pages[html_export.crew_page_name(bo)])
+        self.assertIn("Haslar to Yarmouth", bo_text)
+        self.assertNotIn("Yarmouth to Poole", bo_text)
+
+    def test_index_lists_and_links_every_crew_member_who_links_home(self):
+        al = self.d.add_crew(name="Al")
+        s1 = self._passage(departed="Haslar", bound="Yarmouth", dog=18.4,
+                           log_start=0.0, log_end=17.6)
+        self.d.set_session_crew(s1, [al], skipper_id=al)
+        pages = self._pages()
+
+        page_name = html_export.crew_page_name(al)
+        self.assertIn(page_name, pages)                                  # written
+        self.assertIn(f'href="{page_name}"', pages["index.html"])        # linked
+        # The whole-export invariants, now with a crew page present.
+        index_hrefs = set(re.findall(r'href="([^"]*)"', pages["index.html"]))
+        self.assertEqual(index_hrefs, set(pages) - {"index.html"})
+        self.assertIn('href="index.html"', pages[page_name])
+
+    def test_crew_page_escapes_the_name(self):
+        cid = self.d.add_crew(name=XSS)
+        s1 = self._passage(departed="A", bound="B", dog=1.0,
+                           log_start=0.0, log_end=1.0)
+        self.d.set_session_crew(s1, [cid], skipper_id=cid)
+        for name, html in self._pages().items():
+            with self.subTest(page=name):
+                self.assertNotIn("<script", html.lower())
+                self.assertNotIn('alert("x")', html)
+
+    def test_retired_member_still_gets_a_page_and_is_badged(self):
+        cid = self.d.add_crew(name="Al")
+        s1 = self._passage(departed="A", bound="B", dog=1.0,
+                           log_start=0.0, log_end=1.0)
+        self.d.set_session_crew(s1, [cid], skipper_id=cid)
+        self.d.retire_crew(cid)                          # gone from the picker
+        pages = self._pages()
+        self.assertIn(html_export.crew_page_name(cid), pages)   # history still has a page
+        self.assertIn("retired", pages["index.html"].lower())
+
+    def test_no_crew_section_or_pages_without_a_roster(self):
+        self._passage(departed="A", bound="B", dog=1.0, log_start=0.0, log_end=1.0)
+        pages = self._pages()
+        self.assertFalse([n for n in pages if n.startswith("crew-")])
+        self.assertNotIn("<h2>Crew", pages["index.html"])
+
+
 if __name__ == "__main__":
     unittest.main()
