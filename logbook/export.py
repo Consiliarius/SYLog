@@ -358,9 +358,54 @@ def export_html(d, session_id, out_dir, *, sails=None,
         tasks, tz=tz, vessel=d.get_meta("vessel_name", ""))))
     written.append(_write_text(out_dir / "engine.html", html_export.render_engine(
         d, _cumulative_rows(d), tz=tz)))
+
+    # A page per roster member — their passages, and total DOG + DTW (§4 handoff,
+    # Q3). Built from _summary_row so the per-crew figures cannot disagree with the
+    # session pages, and linked from the index. Only members on the roster get a
+    # page, so a database with no crew writes none (the four-page set is unchanged).
+    crew = [{"id": m["id"], "name": m["name"], "active": m["active"],
+             "passages": _crew_passage_rows(d, m["id"])} for m in d.crew()]
+    vessel = d.get_meta("vessel_name", "")
+    for member in crew:
+        written.append(_write_text(
+            out_dir / html_export.crew_page_name(member["id"]),
+            html_export.render_crew(member, tz=tz, vessel=vessel)))
+
     written.append(_write_text(out_dir / "index.html", html_export.render_index(
-        d, d.sessions(), open_count, tz=tz)))
+        d, d.sessions(), open_count, tz=tz, crew=crew)))
     return written
+
+
+def _crew_passage_rows(d, crew_id) -> list[dict]:
+    """One ``_summary_row`` per passage a crew member was aboard, each carrying
+    that member's ``is_skipper`` flag. Reuses ``_summary_row`` so the per-crew page
+    reports the same DOG/DTW the session page does (§14.10.1 — parity by
+    construction), rather than a second, divergent notion of distance."""
+    rows = []
+    for passage_row in d.crew_passages(crew_id):
+        row = _summary_row(d, passage_row)
+        row["is_skipper"] = passage_row["is_skipper"]
+        rows.append(row)
+    return rows
+
+
+def _crew_display(d, session) -> tuple[str, str]:
+    """(skipper, crew) as names for the summary — resolved from the roster, with
+    the legacy free-text columns as the fallback (§4 handoff).
+
+    Skipper prefers the roster snapshot (``session_crew.name`` for the flagged
+    member), falling back to the pre-v4 free-text ``session.skipper``. Crew is the
+    MERGED list: the roster's non-skipper names plus the free-text Guests (the
+    re-purposed ``session.crew`` column) — one legible "who was aboard" string,
+    the same principle sail names follow at export time. The snapshot names keep a
+    past passage legible even after a crew member is renamed or retired (§8).
+    """
+    skipper = d.session_skipper_name(session["id"]) or (session["skipper"] or "")
+    names = list(d.session_crew_names(session["id"]))
+    guests = session["crew"]
+    if guests:
+        names.append(guests)
+    return skipper, ", ".join(names)
 
 
 def _summary_row(d, session) -> dict:
@@ -371,11 +416,16 @@ def _summary_row(d, session) -> dict:
     archived (§8). It resolves at EXPORT time, so re-exporting an old session
     stamps it with the current identity: accepted, and the same precedent as sail
     names resolving at export time.
+
+    ``skipper`` and ``crew`` likewise resolve at export time from the roster (with
+    the legacy free text as fallback), so the archival ``crew`` column reads as the
+    merged "who was aboard" list rather than the bare guests field (§4 handoff).
     """
     row = {col: session[col] for col in SESSION_COLUMNS}
     split = passage.time_split(d.passage_events(session["id"]), session)
     row["time_under_way_min"] = round(split.under_way_min, 1)
     row["time_stationary_min"] = round(split.stationary_min, 1)
+    row["skipper"], row["crew"] = _crew_display(d, session)
     for col in VESSEL_COLUMNS:
         row[col] = d.get_meta(col, "")
     return row

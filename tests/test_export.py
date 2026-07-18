@@ -141,9 +141,21 @@ class ExportTestCase(unittest.TestCase):
     def test_summary_carries_session_metadata(self):
         self._export()
         row = read_csv(self.out / "session-001-summary.csv")[0]
-        self.assertEqual(row["skipper"], "A. Skipper")
+        self.assertEqual(row["skipper"], "A. Skipper")   # legacy free text, no roster
         self.assertEqual(row["bound_for"], "Boulogne")
         self.assertIn("autolog_active", row)          # the new column, per §8
+
+    def test_summary_resolves_roster_skipper_and_merges_crew_with_guests(self):
+        # The roster wins over the legacy free text, and the crew column becomes
+        # the merged "who was aboard" list: roster crew + free-text guests (§4).
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        self.d.set_session_crew(self.sid, [al, bo], skipper_id=al)
+        self.d.update_session(self.sid, crew="Deckhand Sam")   # a one-off guest
+        self._export()
+        row = read_csv(self.out / "session-001-summary.csv")[0]
+        self.assertEqual(row["skipper"], "Al")         # roster snapshot, not "A. Skipper"
+        self.assertEqual(row["crew"], "Bo, Deckhand Sam")   # non-skipper roster + guest
 
     def test_summary_carries_the_derived_time_split(self):
         # §5.6 under way / stationary written into the archival record, not left

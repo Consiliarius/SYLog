@@ -34,6 +34,18 @@ def _menu_labels(optionmenu):
     return [inner.entrycget(i, "label") for i in range(inner.index("end") + 1)]
 
 
+def _pick_skipper(view, crew_id):
+    """Drive the skipper drop-down to a roster member, as a user would."""
+    sel = view.crew_sel
+    sel._skipper.set(sel._id_to_label[crew_id])
+
+
+def _pick_crew(view, crew_id, slot=0):
+    """Drive one crew slot's drop-down to a roster member."""
+    sel = view.crew_sel
+    sel._crew_vars[slot].set(sel._id_to_label[crew_id])
+
+
 class SessionTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -65,28 +77,89 @@ class SessionTestCase(unittest.TestCase):
     # -- start dialog (§6.2) ---------------------------------------------------
 
     def test_start_view_autopopulates_from_previous_session(self):
-        sid = self.d.create_session(opened_utc="2026-07-12T09:00:00Z", skipper="A. Skipper",
+        sid = self.d.create_session(opened_utc="2026-07-12T09:00:00Z",
                                     crew="Mate", bound_for="Rye", variation_deg=1.5)
         self.d.update_session(sid, log_end_nm=120.5)
         self.d.close_session(sid, closed_utc="2026-07-12T18:00:00Z")
 
         app = self._app()
         view = forms.SessionStartView(app._content, app)
-        self.assertEqual(view.entries["skipper"].get(), "A. Skipper")
-        self.assertEqual(view.entries["crew"].get(), "Mate")
+        # 'crew' is now the free-text Guests field; skipper and crew proper are the
+        # roster picker, carried forward separately (see the roster tests below).
+        self.assertEqual(view.entries["crew"].get(), "Mate")           # guests carry on
         self.assertEqual(view.entries["departed_from"].get(), "Rye")   # where we ended up
         self.assertEqual(view.entries["log_start_nm"].get(), "120.5")  # impeller carries on
+        self.assertNotIn("skipper", view.entries)                      # roster, not free text
 
-    def test_start_creates_session_with_details(self):
+    def test_start_view_carries_forward_the_previous_roster_selection(self):
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        sid = self.d.create_session(opened_utc="2026-07-12T09:00:00Z")
+        self.d.set_session_crew(sid, [al, bo], skipper_id=al)
+        self.d.close_session(sid, closed_utc="2026-07-12T18:00:00Z")
+
         app = self._app()
         view = forms.SessionStartView(app._content, app)
-        view.entries["skipper"].insert(0, "A. Skipper")
+        # Al carried forward as skipper (his own slot); Bo into a crew slot. The
+        # skipper is not also a crew slot, so crew_ids is just [Bo].
+        self.assertEqual(view.crew_sel.skipper_id(), al)
+        self.assertEqual(view.crew_sel.crew_ids(), [bo])
+
+    def test_start_view_drops_a_since_retired_member_from_the_defaults(self):
+        # A member who retired between passages must not arrive pre-ticked on the
+        # next one — the carry-forward is a convenience, not history.
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        sid = self.d.create_session(opened_utc="2026-07-12T09:00:00Z")
+        self.d.set_session_crew(sid, [al, bo], skipper_id=al)
+        self.d.close_session(sid, closed_utc="2026-07-12T18:00:00Z")
+        self.d.retire_crew(al)                            # skipper has since left
+
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        self.assertIsNone(view.crew_sel.skipper_id())     # retired -> not defaulted
+        self.assertEqual(view.crew_sel.crew_ids(), [bo])  # only the still-active one
+
+    def test_start_shows_two_empty_crew_slots_by_default(self):
+        self.d.add_crew(name="Al")
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        self.assertEqual(len(view.crew_sel._crew_vars), 2)   # two slots by default
+        self.assertIsNone(view.crew_sel.skipper_id())        # nothing picked yet
+        self.assertEqual(view.crew_sel.crew_ids(), [])
+
+    def test_start_creates_session_with_a_roster_skipper_and_crew(self):
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        _pick_skipper(view, al)                     # skipper drop-down
+        _pick_crew(view, bo, slot=0)               # first crew slot
         view.entries["bound_for"].insert(0, "Boulogne")
         view._start()
         session = self.d.open_session()
-        self.assertEqual(session["skipper"], "A. Skipper")
         self.assertEqual(session["bound_for"], "Boulogne")
+        self.assertEqual(self.d.session_skipper_id(session["id"]), al)
+        self.assertEqual(self.d.session_skipper_name(session["id"]), "Al")
+        # the skipper is folded into the crew set even without a separate slot
+        self.assertEqual(set(self.d.session_crew_ids(session["id"])), {al, bo})
         self.assertIsInstance(app.views.current, SessionView)
+
+    def test_add_crew_slot_takes_more_than_the_default_two(self):
+        a = self.d.add_crew(name="Ann")
+        b = self.d.add_crew(name="Ben")
+        c = self.d.add_crew(name="Cat")
+        app = self._app()
+        view = forms.SessionStartView(app._content, app)
+        view.crew_sel._add_slot()                  # the '+ Add crew' button
+        self.assertEqual(len(view.crew_sel._crew_vars), 3)
+        _pick_skipper(view, a)
+        _pick_crew(view, b, slot=0)
+        _pick_crew(view, c, slot=2)                # the added third slot
+        view._start()
+        sid = self.d.open_session()["id"]
+        self.assertEqual(set(self.d.session_crew_ids(sid)), {a, b, c})
+        self.assertEqual(self.d.session_skipper_id(sid), a)
 
     def test_start_place_fields_offer_configured_locations(self):
         # The bug: standing locations were selectable on Depart/Arrive but NOT on
@@ -97,8 +170,8 @@ class SessionTestCase(unittest.TestCase):
             labels = _menu_labels(view.entries[col]._place_menu)
             self.assertIn("Home berth", labels)
             self.assertIn("Fuel pontoon", labels)
-        for col in ("skipper", "crew"):           # not places — no picker
-            self.assertFalse(hasattr(view.entries[col], "_place_menu"))
+        self.assertNotIn("skipper", view.entries)                       # roster now
+        self.assertFalse(hasattr(view.entries["crew"], "_place_menu"))  # guests: plain
 
     def test_picking_a_location_fills_the_field_and_saves(self):
         app = self._app(locations=["Home berth"])
@@ -125,16 +198,37 @@ class SessionTestCase(unittest.TestCase):
             self.assertFalse(hasattr(view.entries[col], "_place_menu"))
 
     def test_skip_opens_immediately_with_nulls_and_details_can_fix_it(self):
+        al = self.d.add_crew(name="Al")
         app = self._app()
         forms.SessionStartView(app._content, app)._skip()
         session = self.d.open_session()
         self.assertIsNotNone(session)
-        self.assertIsNone(session["skipper"])            # nulls everywhere
+        self.assertIsNone(session["skipper"])                    # legacy free text: null
+        self.assertEqual(self.d.session_crew_ids(session["id"]), [])   # no roster yet
 
         edit = forms.SessionEditView(app._content, app, session)
-        edit.entries["skipper"].insert(0, "A. Skipper")
+        _pick_skipper(edit, al)                                  # pick a roster skipper
+        edit.entries["bound_for"].insert(0, "Rye")
         edit._save()
-        self.assertEqual(self.d.open_session()["skipper"], "A. Skipper")
+        self.assertEqual(self.d.session_skipper_id(session["id"]), al)
+        self.assertEqual(self.d.open_session()["bound_for"], "Rye")
+
+    def test_edit_roundtrips_the_roster_selection(self):
+        al = self.d.add_crew(name="Al")
+        bo = self.d.add_crew(name="Bo")
+        session = self._open_session()
+        self.d.set_session_crew(session["id"], [al, bo], skipper_id=al)
+
+        app = self._app()
+        edit = forms.SessionEditView(app._content, app, session)
+        # the current selection is pre-filled: Al skipper, Bo in a crew slot.
+        self.assertEqual(edit.crew_sel.skipper_id(), al)
+        self.assertEqual(edit.crew_sel.crew_ids(), [bo])
+        # Bo now skippers; Al (only the previous skipper, not a crew slot) drops.
+        _pick_skipper(edit, bo)
+        edit._save()
+        self.assertEqual(self.d.session_skipper_id(session["id"]), bo)
+        self.assertEqual(self.d.session_crew_ids(session["id"]), [bo])
 
     def test_starting_a_session_marks_the_log_as_opened(self):
         app = self._app()

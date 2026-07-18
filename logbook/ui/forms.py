@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from logbook import db, engine, passage
 from logbook.ui import render, theme
-from logbook.ui.app import _big_button, passage_next_kind, write_event
+from logbook.ui.app import _big_button, _ScrollBody, passage_next_kind, write_event
 
 _PRECIP_TYPES = ("", "none", "rain", "drizzle", "hail", "sleet", "snow")
 _INTENSITIES = ("", "light", "moderate", "heavy")
@@ -680,6 +681,31 @@ def _plain_entry(app, parent, width=10):
                     highlightbackground=theme.BG_BUTTON, font=app.font_base)
 
 
+def _option_menu(app, parent, var, options):
+    """A styled OptionMenu, matching the place-picker and variation selectors."""
+    om = tk.OptionMenu(parent, var, *options)
+    om.configure(bg=theme.BG_BUTTON, fg=theme.FG, highlightthickness=0,
+                 activebackground=theme.ACCENT, font=app.font_base)
+    return om
+
+
+def _slim_button(app, parent, text, command):
+    """A compact, low-chrome button for a minor inline action (e.g. '+ Add crew').
+
+    Lighter than ``_big_button`` — the small font, tight padding and no border —
+    so a secondary control inside a form box does not read as a main action. Keeps
+    the same flat hover so it is still clearly a button."""
+    base = theme.BG_BUTTON
+    hover = theme.mix(base, theme.FG, 0.16)
+    btn = tk.Button(parent, text=text, command=command, bg=base, fg=theme.FG,
+                    activebackground=hover, activeforeground=theme.FG,
+                    bd=0, relief="flat", highlightthickness=0, cursor="hand2",
+                    font=app.font_small, padx=theme.PAD, pady=3)
+    btn.bind("<Enter>", lambda _e: btn.configure(bg=hover))
+    btn.bind("<Leave>", lambda _e: btn.configure(bg=base))
+    return btn
+
+
 def _time_entry(app, parent):
     entry = _plain_entry(app, parent, width=6)
     entry.insert(0, datetime.now(timezone.utc).astimezone(app.tz).strftime("%H:%M"))
@@ -953,12 +979,16 @@ def engine_form(parent, app, session):
 
 # -- sessions -----------------------------------------------------------------
 
-# Variation is handled separately: it needs an E/W selector, not a typed sign.
+# Skipper and crew are no longer free text: they are chosen from the durable
+# roster (_CrewSelection), so a crew member's miles can be tracked across passages
+# and the skipper is one of them, handled the same way. What stays free text is the
+# `crew` column, RE-PURPOSED as a Guests field for one-off names not on the roster
+# — merged with the roster names on display (§4 handoff). Variation is handled
+# separately: it needs an E/W selector, not a typed sign.
 _SESSION_FIELDS = (
     ("departed_from", "From"),
     ("bound_for", "Bound for"),
-    ("skipper", "Skipper"),
-    ("crew", "Crew"),
+    ("crew", "Guests"),
     ("log_start_nm", "Log reading (start), nm"),
 )
 _SESSION_NUMERIC = ("log_start_nm", "log_end_nm")
@@ -976,8 +1006,126 @@ def _fill_entry(entry, name):
     entry.insert(0, name)
 
 
-def _build_session_fields(app, parent, values):
-    """Returns {column: widget}; ``variation_deg`` maps to an (entry, E/W var) pair.
+class _CrewSelection:
+    """The roster picker on the session forms (§4 handoff): a Skipper drop-down and
+    a set of crew slots, each a drop-down onto the roster.
+
+    SLOTS, not one row per roster member — so the widget's size tracks the crew
+    ABOARD (a handful), not the size of the roster, which grows without bound as
+    crew turn over. Two slots by default; '+ Add crew' adds more. Picking '(none)'
+    empties a slot. The skipper is always aboard: ``set_session_crew`` folds them
+    in, so they need not also occupy a crew slot.
+
+    Any already-selected member is offered even if since retired, so editing a
+    passage never drops someone who has left the roster since — the reason retiring
+    keeps the row rather than deleting it. A name shared by two members is
+    disambiguated in the drop-down (by notes, else id), so a label maps to one id.
+    """
+
+    _NOBODY = "(nobody)"       # the skipper drop-down's 'no skipper' option
+    _NONE = "(none)"           # an empty crew slot
+    _DEFAULT_SLOTS = 2
+
+    def __init__(self, app, parent, *, skipper_id=None, crew_ids=()):
+        self.app = app
+        self._skipper = None                       # set below iff the roster is non-empty
+        self._crew_vars: list[tk.StringVar] = []
+        selected = set(crew_ids) | ({skipper_id} if skipper_id else set())
+        members = self._roster(selected)
+        self._label_to_id, self._id_to_label = self._labels(members)
+        self._options = [self._id_to_label[m["id"]] for m in members]
+
+        box = tk.LabelFrame(parent, text="Crew", bg=theme.BG, fg=theme.FG_MUTED,
+                            font=app.font_small, bd=1, labelanchor="nw",
+                            padx=theme.PAD, pady=theme.PAD)
+        self.widget = box
+        if not members:
+            tk.Label(box, text="No crew on the roster yet — add them from the "
+                     "launcher's Crew button. (Guests, above, still take free text.)",
+                     bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(anchor="w")
+            return
+
+        skipper_row = tk.Frame(box, bg=theme.BG)
+        skipper_row.pack(fill="x", anchor="w")
+        tk.Label(skipper_row, text="Skipper", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small, width=8, anchor="e").pack(side="left", padx=(0, theme.PAD))
+        self._skipper = tk.StringVar(value=self._id_to_label.get(skipper_id, self._NOBODY))
+        _option_menu(app, skipper_row, self._skipper,
+                     [self._NOBODY, *self._options]).pack(side="left")
+
+        tk.Label(box, text="Crew aboard", bg=theme.BG, fg=theme.FG_MUTED,
+                 font=app.font_small).pack(anchor="w", pady=(theme.PAD, 0))
+        self._slots = tk.Frame(box, bg=theme.BG)
+        self._slots.pack(fill="x", anchor="w")
+
+        # One slot per pre-filled crew member (the skipper is not a crew slot),
+        # padded to the default so a fresh passage opens with two empty slots.
+        crew_only = [c for c in crew_ids if c != skipper_id]
+        while len(crew_only) < self._DEFAULT_SLOTS:
+            crew_only.append(None)
+        for cid in crew_only:
+            self._add_slot(cid)
+
+        _slim_button(app, box, "+ Add crew", self._add_slot).pack(
+            anchor="w", pady=(theme.PAD, 0))
+
+    def _add_slot(self, crew_id=None):
+        """Append one crew slot, pre-selected to ``crew_id`` or empty. Also the
+        '+ Add crew' button's command (called with no argument)."""
+        var = tk.StringVar(value=self._id_to_label.get(crew_id, self._NONE))
+        self._crew_vars.append(var)
+        _option_menu(self.app, self._slots, var,
+                     [self._NONE, *self._options]).pack(anchor="w", pady=1)
+
+    def _roster(self, selected):
+        """Active crew, plus any already-selected member even if since retired, by
+        name. Including the retired-but-selected is what stops an edit from
+        dropping someone who has left the roster since the passage."""
+        members = list(self.app.d.crew(active_only=True))
+        known = {m["id"] for m in members}
+        for cid in selected:
+            if cid not in known:
+                extra = self.app.d.crew_member(cid)
+                if extra is not None:
+                    members.append(extra)
+        return sorted(members, key=lambda m: m["name"].lower())
+
+    @staticmethod
+    def _labels(members):
+        """Two-way maps between a drop-down label and a crew_id. A name shared by
+        two members is disambiguated (notes, else id) so every label is unique and
+        resolves to one id; a retired member is marked in the label."""
+        counts = Counter(m["name"] for m in members)
+        label_to_id, id_to_label = {}, {}
+        for m in members:
+            label = m["name"]
+            if counts[m["name"]] > 1:
+                label = f"{label} ({m['notes'] or '#' + str(m['id'])})"
+            if not m["active"]:
+                label = f"{label} — retired"
+            label_to_id[label] = m["id"]
+            id_to_label[m["id"]] = label
+        return label_to_id, id_to_label
+
+    def skipper_id(self):
+        if self._skipper is None:
+            return None
+        return self._label_to_id.get(self._skipper.get())
+
+    def crew_ids(self):
+        """The distinct crew members picked across the slots (the skipper is added
+        separately by ``set_session_crew``). Empty slots and duplicates drop out."""
+        ids = []
+        for var in self._crew_vars:
+            cid = self._label_to_id.get(var.get())
+            if cid is not None and cid not in ids:
+                ids.append(cid)
+        return ids
+
+
+def _build_session_fields(app, parent, values, *, skipper_id=None, crew_ids=()):
+    """Returns ``(entries, crew_selection)``. ``entries`` is {column: widget};
+    ``variation_deg`` maps to an (entry, E/W var) pair.
 
     ``departed_from`` and ``bound_for`` also get a place picker beside the text
     box — standing config locations first, then recent history — the same list
@@ -1031,7 +1179,15 @@ def _build_session_fields(app, parent, values):
         magnitude.insert(0, f"{abs(float(stored)):g}")
         hemisphere.set("E" if float(stored) >= 0 else "W")
     entries["variation_deg"] = (magnitude, hemisphere)
-    return entries
+
+    # The roster picker spans the width beneath the fields. It is NOT part of the
+    # entries dict — its selection is a session_crew association, not a session
+    # column, and is persisted separately after the row exists.
+    row += 1
+    crew_sel = _CrewSelection(app, parent, skipper_id=skipper_id, crew_ids=crew_ids)
+    crew_sel.widget.grid(row=row, column=0, columnspan=3, sticky="w",
+                         pady=(theme.PAD, 0))
+    return entries, crew_sel
 
 
 def _collect_session_fields(entries) -> dict:
@@ -1060,15 +1216,23 @@ class SessionStartView(tk.Frame):
         self.app = app
         previous = app.d.last_session()
         values = {}
+        skipper_id, crew_ids = None, ()
         if previous is not None:
             values = {
                 "departed_from": previous["bound_for"] or previous["departed_from"],
                 "bound_for": previous["bound_for"],
-                "skipper": previous["skipper"],
-                "crew": previous["crew"],
+                "crew": previous["crew"],                 # free-text guests carry on
                 "variation_deg": previous["variation_deg"],
                 "log_start_nm": previous["log_end_nm"],   # the impeller carries on
             }
+            # Carry forward the previous crew SELECTION as defaults, but only for
+            # members still active — a member who retired between passages should
+            # not arrive pre-ticked on the next one (the edit view, by contrast,
+            # keeps a session's own retired members; that is history, not a default).
+            active = {m["id"] for m in app.d.crew(active_only=True)}
+            prev_skipper = app.d.session_skipper_id(previous["id"])
+            skipper_id = prev_skipper if prev_skipper in active else None
+            crew_ids = [c for c in app.d.session_crew_ids(previous["id"]) if c in active]
 
         tk.Label(self, text="Start session", bg=theme.BG, fg=theme.FG,
                  font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
@@ -1077,10 +1241,9 @@ class SessionStartView(tk.Frame):
                      bg=theme.BG, fg=theme.FG_MUTED, font=app.font_small).pack(
                 anchor="w", padx=theme.PAD)
 
-        body = tk.Frame(self, bg=theme.BG)
-        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
-        self.entries = _build_session_fields(app, body, values)
-
+        # Footer pinned FIRST so Start/Skip stay reachable; the fields scroll above
+        # it. The roster picker can make the form taller than the 800×480 floor
+        # (§2.1) — the same reason the checklist form and Settings editor scroll.
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", app.show_launch).pack(
@@ -1089,18 +1252,29 @@ class SessionStartView(tk.Frame):
             side="right", padx=theme.PAD, pady=theme.PAD)
         _big_button(footer, "Skip", self._skip).pack(side="right", padx=2, pady=theme.PAD)
 
-    def _open(self, **fields):
+        body = _ScrollBody(self)
+        body.pack(fill="both", expand=True, padx=theme.PAD * 2, pady=theme.PAD)
+        self.entries, self.crew_sel = _build_session_fields(
+            app, body.inner, values, skipper_id=skipper_id, crew_ids=crew_ids)
+
+    def _open(self, *, skipper_id=None, crew_ids=(), **fields):
         d = self.app.d
         now = datetime.now(timezone.utc)
         d.create_session(opened_utc=db.to_iso_utc(now), **fields)
         session = d.open_session()
+        # The roster association is set AFTER the row exists — session_crew
+        # references session(id) (§4 handoff). An empty selection (Skip) is a
+        # harmless no-op replace on a session that has none.
+        d.set_session_crew(session["id"], crew_ids, skipper_id=skipper_id)
         # The log should say it was opened — otherwise the first line of a
         # session is whatever happened to be recorded next.
         write_event(self.app, session, when=now, event_kind="session_open")
         self.app.show_session(session)
 
     def _start(self):
-        self._open(**_collect_session_fields(self.entries))
+        self._open(skipper_id=self.crew_sel.skipper_id(),
+                   crew_ids=self.crew_sel.crew_ids(),
+                   **_collect_session_fields(self.entries))
 
     def _skip(self):
         self._open()      # nulls everywhere; the details can be filled in later
@@ -1116,11 +1290,8 @@ class SessionEditView(tk.Frame):
 
         tk.Label(self, text="Session details", bg=theme.BG, fg=theme.FG,
                  font=app.font_large).pack(anchor="w", padx=theme.PAD, pady=theme.PAD)
-        body = tk.Frame(self, bg=theme.BG)
-        body.pack(fill="x", padx=theme.PAD * 2, pady=theme.PAD)
-        self.entries = _build_session_fields(
-            app, body, {col: session[col] for col in _ALL_SESSION_COLUMNS})
-
+        # Footer pinned first so Save stays reachable; the fields scroll above it,
+        # as the roster picker can outgrow the 800×480 floor (§2.1).
         footer = tk.Frame(self, bg=theme.BG_PANEL)
         footer.pack(side="bottom", fill="x")
         _big_button(footer, "Cancel", self._cancel).pack(
@@ -1128,12 +1299,24 @@ class SessionEditView(tk.Frame):
         _big_button(footer, "Save", self._save).pack(
             side="right", padx=theme.PAD, pady=theme.PAD)
 
+        body = _ScrollBody(self)
+        body.pack(fill="both", expand=True, padx=theme.PAD * 2, pady=theme.PAD)
+        # Pre-fill from THIS session's own association (all associated ids, incl the
+        # skipper and any since-retired member — nothing silently dropped on save).
+        self.entries, self.crew_sel = _build_session_fields(
+            app, body.inner, {col: session[col] for col in _ALL_SESSION_COLUMNS},
+            skipper_id=app.d.session_skipper_id(session["id"]),
+            crew_ids=app.d.session_crew_ids(session["id"]))
+
     def _cancel(self):
         self.app.show_session(self.session)
 
     def _save(self):
-        self.app.d.update_session(self.session["id"], **_collect_session_fields(self.entries))
-        self.app.show_session(self.app.d.open_session())
+        d = self.app.d
+        d.update_session(self.session["id"], **_collect_session_fields(self.entries))
+        d.set_session_crew(self.session["id"], self.crew_sel.crew_ids(),
+                           skipper_id=self.crew_sel.skipper_id())
+        self.app.show_session(d.open_session())
 
 
 class EndSessionView(tk.Frame):

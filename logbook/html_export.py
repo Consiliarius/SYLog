@@ -481,12 +481,16 @@ def _session_card(row, *, tz: tzinfo) -> str:
 
 
 def render_index(d, sessions, open_count: int, *,
-                 tz: tzinfo = timezone.utc) -> str:
+                 tz: tzinfo = timezone.utc, crew=None) -> str:
     """The dashboard — "what state is the boat in?"
 
     Vessel identity, cumulative engine hours WITH their provenance, how many
     items are open, then the sessions newest-first (§14.10.2). Home: every other
     page links back here, and nothing is more than one tap away.
+
+    ``crew`` (the roster, each with its passages) adds a Crew section linking each
+    member's own page (§4 handoff); ``None`` or empty omits it entirely, so a boat
+    with no roster shows no section rather than an empty heading.
     """
     rec = engine.reconciliation(d)
     bar = vessel_bar(_vessel_reference(d))
@@ -519,6 +523,11 @@ def render_index(d, sessions, open_count: int, *,
                      + "</ul>")
     else:
         parts.append(_empty("No sessions logged yet."))
+
+    if crew:
+        parts.append(f"<h2>Crew &middot; {len(crew)}</h2>")
+        parts.append('<ul class="stack">'
+                     + "".join(_crew_index_card(c) for c in crew) + "</ul>")
 
     return page(_vessel_title(d), "".join(parts),
                 subtitle=bar or None, home=False)
@@ -904,3 +913,129 @@ def render_engine(d, rows, *, tz: tzinfo = timezone.utc) -> str:
         parts.append(_empty("No engine runs logged."))
     return page("Engine hours", "".join(parts),
                 subtitle=_vessel_title(d) or None)
+
+
+# -- crew-NNN.html -------------------------------------------------------------
+
+def crew_page_name(member_id) -> str:
+    """The stable filename for a crew member's page. The single source for the
+    name, used both to write the page and to link it from the index, so the two
+    cannot drift (§14.10.1)."""
+    return f"crew-{int(member_id):03d}.html"
+
+
+def _crew_totals(passages) -> dict:
+    """A crew member's mileage over their passages — total DOG and DTW, the count,
+    and how many they skippered (§4 handoff, Q3).
+
+    DTW goes through ``render.distance_through_water``, the one renderer the
+    session page and CSV also use, so the total cannot diverge from its parts. A
+    total is ``None`` — shown as '—', never 0 — when NO passage recorded that
+    figure: zero miles and no reading are different facts (§10.1)."""
+    dog_vals = [p["distance_og_nm"] for p in passages
+                if p["distance_og_nm"] is not None]
+    dtw_vals = [dtw for p in passages
+                if (dtw := distance_through_water(p)) is not None]
+    return {
+        "passages": len(passages),
+        "skippered": sum(1 for p in passages if p["is_skipper"]),
+        "dog": sum(dog_vals) if dog_vals else None,
+        "dtw": sum(dtw_vals) if dtw_vals else None,
+    }
+
+
+def _crew_index_card(c) -> str:
+    """One roster member on the dashboard — name, passage count and totals, linking
+    to their own page. The whole card is the tap target, one-handed (§14.10.2)."""
+    totals = _crew_totals(c["passages"])
+    n = totals["passages"]
+    facts = [f"{n} passage" if n == 1 else f"{n} passages"]
+    if totals["dog"] is not None:
+        facts.append(f"{totals['dog']:g} nm DOG")
+    if totals["dtw"] is not None:
+        facts.append(f"{totals['dtw']:g} nm DTW")
+    trail = " &middot; ".join(_esc(f) for f in facts)
+
+    marks = [_badge("crew", kind="quiet")]
+    if not c["active"]:
+        marks.append(_badge("retired", kind="quiet"))
+    return (
+        f'<li class="card"><a class="row-link" href="{_esc(crew_page_name(c["id"]))}">'
+        f'<div class="task-head">{"".join(marks)}</div>'
+        f'<p class="task-desc">{_esc(c["name"])}</p>'
+        + (f'<p class="muted">{trail}</p>' if trail else "")
+        + "</a></li>"
+    )
+
+
+def _crew_passage_card(row, *, tz: tzinfo) -> str:
+    """One passage on a crew member's page — DOG and DTW, both labelled (§6.8),
+    linking to the full session page. ``row`` is ``export._summary_row``'s own
+    dict (+ is_skipper), so the figures match the session page's (§14.10.1)."""
+    number = int(row["id"])
+    passage = " to ".join(x for x in (row["departed_from"], row["bound_for"]) if x)
+
+    facts = []
+    if row["distance_og_nm"] is not None:
+        facts.append(f"DOG {row['distance_og_nm']:g} nm")
+    dtw = distance_through_water(row)
+    if dtw is not None:
+        facts.append(f"DTW {dtw:g} nm")
+    trail = " &middot; ".join(_esc(f) for f in facts)
+
+    marks = [_badge(f"Session {number:03d}", kind="quiet")]
+    if row["is_skipper"]:
+        marks.append(_badge("skipper"))
+    return (
+        f'<li class="card"><a class="row-link" href="session-{number:03d}.html">'
+        f'<div class="task-head">{"".join(marks)}'
+        f'<span class="muted">{_esc(_when(row["opened_utc"], tz=tz, fmt="%d %b %Y"))}</span>'
+        "</div>"
+        f'<p class="task-desc">{_esc(passage) or "&mdash;"}</p>'
+        + (f'<p class="muted">{trail}</p>' if trail else "")
+        + "</a></li>"
+    )
+
+
+def render_crew(member, *, tz: tzinfo = timezone.utc, vessel: str = "") -> str:
+    """One crew member's page — "how far has this person sailed with the boat?"
+
+    The totals lead (DOG and DTW, each labelled so neither is read as the other,
+    §6.8), then every passage they were aboard, linking to the session page. Both
+    figures reported, deliberately: their difference over time is the tidal set,
+    and the skipper wants to see which reference tracks better (§4 handoff, Q3).
+
+    ``member`` is ``{id, name, active, passages}``; each passage is an
+    ``export._summary_row`` dict + ``is_skipper``, so this page cannot disagree
+    with the session pages beside it (§14.10.1).
+    """
+    passages = member["passages"]
+    totals = _crew_totals(passages)
+
+    lead = ['<div class="card lead">']
+    figures = []
+    if totals["dog"] is not None:
+        figures.append(("DOG total", totals["dog"]))
+    if totals["dtw"] is not None:
+        figures.append(("DTW total", totals["dtw"]))
+    if figures:
+        cells = "".join(
+            f'<div class="dfig"><span class="figure">{value:g} nm</span>'
+            f'<span class="fig-label">{label}</span></div>' for label, value in figures)
+        lead.append(f'<div class="figures">{cells}</div>')
+    lead.append('<dl class="kv">')
+    facts = [("Passages", _esc(totals["passages"])),
+             ("As skipper", _esc(totals["skippered"]))]
+    if not member["active"]:
+        facts.append(("Status", _badge("retired", kind="quiet")))
+    lead.extend(f"<div><dt>{_esc(k)}</dt><dd>{v}</dd></div>" for k, v in facts)
+    lead.append("</dl></div>")
+
+    parts = ["".join(lead), "<h2>Passages</h2>"]
+    if passages:
+        parts.append('<ul class="stack">' + "".join(
+            _crew_passage_card(p, tz=tz) for p in passages) + "</ul>")
+    else:
+        parts.append(_empty("No passages logged for this crew member yet."))
+
+    return page(member["name"], "".join(parts), subtitle=vessel or None)

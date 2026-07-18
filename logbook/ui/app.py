@@ -517,6 +517,16 @@ class App:
         from logbook.ui import tasks
         self._show(lambda: tasks.TasksIssuesView(self._content, self))
 
+    # -- crew roster (§4 handoff) ---------------------------------------------
+
+    def show_crew(self, event=None) -> None:
+        from logbook.ui import crew
+        self._show(lambda: crew.CrewView(self._content, self))
+
+    def show_crew_form(self, existing=None) -> None:
+        from logbook.ui import crew
+        self._show(lambda: crew.CrewFormView(self._content, self, existing=existing))
+
     def show_settings(self, event=None) -> None:
         """Open Settings, remembering how to rebuild the view we came from.
 
@@ -1016,9 +1026,13 @@ class LaunchView(tk.Frame):
         if self._card is not None:
             self._card.pack(pady=(0, theme.PAD))
 
-        # Action buttons, a 2×3 grid (§14.9). Start Session and Engine keep their
-        # top-row positions with a button-sized gap between them (column 1 left
-        # empty); View Log drops to the second row, beneath Engine.
+        # Action buttons, now a 3×3 grid (§14.9, extended). Start Session and
+        # Engine keep their top-row positions with a button-sized gap between them
+        # (column 1 left empty unless Moorwatch fills it); View Log sits on the
+        # second row, beneath Engine. Crew management (§4 handoff) takes the third
+        # row — a bottom row added rather than squeezing an existing one, so
+        # nothing already under the thumb moves. The layout may want a tidy-up to
+        # group the buttons logically once the row is settled.
         grid = tk.Frame(self, bg=theme.BG)
         grid.pack(pady=(theme.PAD, theme.PAD * 2))
         self._start_btn = _big_button(grid, "Start Session", self._start_session, width=14)
@@ -1043,6 +1057,8 @@ class LaunchView(tk.Frame):
         self._tasks_btn.grid(row=1, column=1, padx=theme.PAD, pady=theme.PAD)
         self._log_btn = _big_button(grid, "View Log", self._view_log, width=14)
         self._log_btn.grid(row=1, column=2, padx=theme.PAD, pady=theme.PAD)
+        self._crew_btn = _big_button(grid, "Crew", self._crew, width=14)
+        self._crew_btn.grid(row=2, column=0, padx=theme.PAD, pady=theme.PAD)
 
         # Two separate lines with two different owners, deliberately not one:
         #   _banner  — periodic STATUS, rewritten by refresh() on every 250 ms
@@ -1147,6 +1163,9 @@ class LaunchView(tk.Frame):
 
     def _tasks(self) -> None:
         self.app.show_tasks()
+
+    def _crew(self) -> None:
+        self.app.show_crew()
 
 
 class PlaceholderView(tk.Frame):
